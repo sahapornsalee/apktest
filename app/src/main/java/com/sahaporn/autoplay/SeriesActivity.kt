@@ -1,28 +1,32 @@
 package com.sahaporn.autoplay
 
-import android.content.Intent
 import android.os.Bundle
-import android.widget.ArrayAdapter
+import android.view.Menu
+import android.view.MenuItem
 import android.widget.Button
-import android.widget.CheckBox
-import android.widget.EditText
 import android.widget.ListView
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.appbar.MaterialToolbar
 
 class SeriesActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_ID = "series_id"
+        private const val MENU_ADD = 1
+        private const val MENU_SKIP = 2
+        private const val MENU_RENAME = 3
+        private const val MENU_CATEGORY = 4
+        private const val MENU_SORT = 5
+        private const val MENU_RESET = 6
+        private const val MENU_DELETE = 7
     }
 
     private lateinit var seriesId: String
     private lateinit var series: Series
     private lateinit var txtInfo: TextView
     private lateinit var btnResume: Button
-    private lateinit var listView: ListView
+    private lateinit var adapter: RowAdapter
 
     private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -41,19 +45,20 @@ class SeriesActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_series)
+        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
+        setSupportActionBar(toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        setupBars(findViewById(R.id.root), toolbar)
+
         seriesId = intent.getStringExtra(EXTRA_ID) ?: run { finish(); return }
         txtInfo = findViewById(R.id.txtInfo)
         btnResume = findViewById(R.id.btnResume)
-        listView = findViewById(R.id.list)
+        adapter = RowAdapter(this)
+        findViewById<ListView>(R.id.list).adapter = adapter
 
         btnResume.setOnClickListener { play(series.lastIndex, series.lastPosition) }
         findViewById<Button>(R.id.btnSkip).setOnClickListener { showSkipDialog() }
         findViewById<Button>(R.id.btnAdd).setOnClickListener { showAddDialog() }
-        listView.setOnItemClickListener { _, _, pos, _ -> play(pos, 0L) }
-        listView.setOnItemLongClickListener { _, _, pos, _ ->
-            confirmRemove(pos)
-            true
-        }
     }
 
     override fun onResume() {
@@ -62,19 +67,79 @@ class SeriesActivity : AppCompatActivity() {
         render()
     }
 
+    override fun onSupportNavigateUp(): Boolean {
+        finish()
+        return true
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, MENU_ADD, 0, "เพิ่มตอน")
+        menu.add(0, MENU_SKIP, 1, "ตั้งค่าข้ามเพลง (ทุกตอน)")
+        menu.add(0, MENU_RENAME, 2, "เปลี่ยนชื่อเรื่อง")
+        menu.add(0, MENU_CATEGORY, 3, "ย้ายหมวดหมู่")
+        menu.add(0, MENU_SORT, 4, "เรียงตอนตามชื่อไฟล์")
+        menu.add(0, MENU_RESET, 5, "เริ่มดูใหม่ตั้งแต่ตอนแรก")
+        menu.add(0, MENU_DELETE, 6, "ลบเรื่องนี้")
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        when (item.itemId) {
+            MENU_ADD -> showAddDialog()
+            MENU_SKIP -> showSkipDialog()
+            MENU_RENAME -> Dialogs.askText(this, "เปลี่ยนชื่อเรื่อง", series.name) { name ->
+                series.name = name
+                save()
+            }
+            MENU_CATEGORY -> Dialogs.chooseCategory(this, series.category) { cat ->
+                series.category = cat
+                save()
+            }
+            MENU_SORT -> {
+                series.editEpisodes { eps ->
+                    val sorted = MediaScan.sorted(eps)
+                    eps.clear()
+                    eps.addAll(sorted)
+                }
+                save()
+            }
+            MENU_RESET -> {
+                series.lastIndex = 0
+                series.lastPosition = 0
+                save()
+            }
+            MENU_DELETE -> Dialogs.confirm(this, "ลบ “${series.name}” ออกจากรายการ?\n(ไฟล์วิดีโอในเครื่องจะไม่ถูกลบ)", "ลบ") {
+                Store.delete(this, series.id)
+                finish()
+            }
+            else -> return super.onOptionsItemSelected(item)
+        }
+        return true
+    }
+
+    private fun save() {
+        Store.put(this, series)
+        render()
+    }
+
     private fun render() {
         title = series.name
         val intro = if (series.skipIntro && series.introEnd > series.introStart) {
-            "ข้ามเพลงเปิด ${TimeText.format(series.introStart.toLong())}–${TimeText.format(series.introEnd.toLong())}"
+            "ข้ามเพลงเปิด ${TimeText.format(series.introStart)}–${TimeText.format(series.introEnd)}"
+        } else if (series.skipIntro) {
+            "ยังไม่ได้ตั้งเวลาเพลงเปิด"
         } else {
-            "ไม่ข้ามเพลงเปิด"
+            "ปิดการข้ามเพลงเปิด"
         }
         val outro = if (series.skipOutro && series.outroLength > 0) {
-            "ข้ามเพลงปิด ${TimeText.format(series.outroLength.toLong())} สุดท้าย"
+            "ข้ามเพลงปิด ${TimeText.format(series.outroLength)} สุดท้าย"
+        } else if (series.skipOutro) {
+            "ยังไม่ได้ตั้งเวลาเพลงปิด"
         } else {
-            "ไม่ข้ามเพลงปิด"
+            "ปิดการข้ามเพลงปิด"
         }
-        txtInfo.text = "${series.episodes.size} ตอน · เล่นต่อกันอัตโนมัติ\n$intro · $outro"
+        val cat = series.category.ifEmpty { "ไม่มีหมวดหมู่" }
+        txtInfo.text = "📁 $cat · ${series.episodes.size} ตอน · เล่นต่อกันอัตโนมัติ\n$intro\n$outro"
 
         if (series.lastIndex >= series.episodes.size) {
             series.lastIndex = 0
@@ -87,110 +152,114 @@ class SeriesActivity : AppCompatActivity() {
             "▶ ดูต่อ ตอนที่ ${series.lastIndex + 1} (${TimeText.format(series.lastPosition / 1000)})"
         }
 
-        val rows = series.episodes.mapIndexed { i, e ->
-            val mark = if (i == series.lastIndex) "▶ " else ""
-            "$mark${i + 1}. ${e.name}"
+        adapter.rows = series.episodes.mapIndexed { i, e ->
+            val notes = mutableListOf<String>()
+            if (i == series.lastIndex) notes.add("▶ ดูถึงตอนนี้")
+            if (e.hasOverride) notes.add("⚙ ตั้งเวลาข้ามเฉพาะตอนนี้")
+            Row(
+                title = "${i + 1}. ${e.name}",
+                subtitle = notes.joinToString(" · "),
+                highlight = i == series.lastIndex,
+                onMore = { episodeMenu(i) },
+            ) { play(i, 0L) }
         }
-        listView.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, rows)
     }
 
     private fun play(index: Int, position: Long) {
         if (series.episodes.isEmpty()) return
-        startActivity(
-            Intent(this, PlayerActivity::class.java)
-                .putExtra(PlayerActivity.EXTRA_ID, series.id)
-                .putExtra(PlayerActivity.EXTRA_INDEX, index)
-                .putExtra(PlayerActivity.EXTRA_POSITION, position)
+        PlayerActivity.start(this, series.id, index, position)
+    }
+
+    private fun episodeMenu(index: Int) {
+        val ep = series.episodes[index]
+        Dialogs.menu(
+            this, "${index + 1}. ${ep.name}", listOf(
+                "▶ เล่นจากตอนนี้" to { play(index, 0L) },
+                "เปลี่ยนชื่อตอน" to {
+                    Dialogs.askText(this, "เปลี่ยนชื่อตอน", ep.name) { name ->
+                        ep.name = name
+                        save()
+                    }
+                },
+                "ตั้งเวลาข้ามเพลงเฉพาะตอนนี้" to { showEpisodeSkipDialog(ep) },
+                "เลื่อนขึ้น" to { moveEpisode(index, -1) },
+                "เลื่อนลง" to { moveEpisode(index, 1) },
+                "ลบตอนนี้ออกจากรายการ" to {
+                    Dialogs.confirm(this, "เอา “${ep.name}” ออกจากรายการ?", "เอาออก") {
+                        series.editEpisodes { it.removeAt(index) }
+                        save()
+                    }
+                },
+            )
         )
     }
 
+    private fun moveEpisode(index: Int, delta: Int) {
+        val target = index + delta
+        if (target !in series.episodes.indices) return
+        series.editEpisodes { it.add(target, it.removeAt(index)) }
+        save()
+    }
+
     private fun showSkipDialog() {
-        val view = layoutInflater.inflate(R.layout.dialog_skip, null)
-        val chkIntro = view.findViewById<CheckBox>(R.id.chkIntro)
-        val chkOutro = view.findViewById<CheckBox>(R.id.chkOutro)
-        val edIntroStart = view.findViewById<EditText>(R.id.edIntroStart)
-        val edIntroEnd = view.findViewById<EditText>(R.id.edIntroEnd)
-        val edOutro = view.findViewById<EditText>(R.id.edOutro)
+        val initial = SkipValues(
+            series.introStart, series.introEnd, series.outroLength, series.skipIntro, series.skipOutro,
+        )
+        Dialogs.skipSettings(this, "ข้ามเพลงเปิด/ปิด (ทุกตอน)", initial, showFlags = true, onReset = null) { v ->
+            series.introStart = v.introStart
+            series.introEnd = v.introEnd
+            series.outroLength = v.outro
+            series.skipIntro = v.skipIntro
+            series.skipOutro = v.skipOutro
+            save()
+            toast("บันทึกแล้ว ใช้กับทุกตอน")
+        }
+    }
 
-        chkIntro.isChecked = series.skipIntro
-        chkOutro.isChecked = series.skipOutro
-        edIntroStart.setText(TimeText.format(series.introStart.toLong()))
-        if (series.introEnd > 0) edIntroEnd.setText(TimeText.format(series.introEnd.toLong()))
-        if (series.outroLength > 0) edOutro.setText(TimeText.format(series.outroLength.toLong()))
-
-        AlertDialog.Builder(this)
-            .setTitle("ตั้งค่าข้ามเพลงเปิด/ปิด")
-            .setView(view)
-            .setPositiveButton("บันทึก") { _, _ ->
-                val start = TimeText.parse(edIntroStart.text.toString())
-                val end = TimeText.parse(edIntroEnd.text.toString())
-                val outro = TimeText.parse(edOutro.text.toString())
-                if (start == null || end == null || outro == null) {
-                    Toast.makeText(this, "รูปแบบเวลาไม่ถูกต้อง เช่น 90 หรือ 1:30", Toast.LENGTH_LONG).show()
-                    return@setPositiveButton
-                }
-                if (end in 1..start) {
-                    Toast.makeText(this, "เวลาจบเพลงเปิดต้องมากกว่าเวลาเริ่ม", Toast.LENGTH_LONG).show()
-                    return@setPositiveButton
-                }
-                series.skipIntro = chkIntro.isChecked
-                series.skipOutro = chkOutro.isChecked
-                series.introStart = start
-                series.introEnd = end
-                series.outroLength = outro
-                Store.put(this, series)
-                render()
-                Toast.makeText(this, "บันทึกแล้ว ใช้กับทุกตอน", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("ยกเลิก", null)
-            .show()
+    private fun showEpisodeSkipDialog(ep: Episode) {
+        val initial = SkipValues(
+            series.introStartOf(ep), series.introEndOf(ep), series.outroOf(ep), series.skipIntro, series.skipOutro,
+        )
+        Dialogs.skipSettings(
+            this, "ข้ามเพลงเฉพาะ: ${ep.name}", initial, showFlags = false,
+            onReset = {
+                ep.clearOverride()
+                save()
+                toast("กลับไปใช้ค่าของเรื่องแล้ว")
+            },
+        ) { v ->
+            ep.introStart = v.introStart
+            ep.introEnd = v.introEnd
+            ep.outroLength = v.outro
+            save()
+            toast("บันทึกแล้ว เฉพาะตอนนี้")
+        }
     }
 
     private fun showAddDialog() {
-        AlertDialog.Builder(this)
-            .setTitle("เพิ่มตอน")
-            .setItems(arrayOf("เพิ่มจากโฟลเดอร์", "เพิ่มไฟล์วิดีโอ")) { _, which ->
-                if (which == 0) pickFolder.launch(null) else pickFiles.launch(arrayOf("video/*"))
-            }
-            .show()
+        Dialogs.menu(
+            this, "เพิ่มตอน", listOf(
+                "เพิ่มจากโฟลเดอร์" to { pickFolder.launch(null) },
+                "เพิ่มไฟล์วิดีโอ" to { pickFiles.launch(arrayOf("video/*")) },
+            )
+        )
     }
 
     private fun addEpisodes(scan: () -> List<Episode>) {
-        Toast.makeText(this, "กำลังค้นหาวิดีโอ…", Toast.LENGTH_SHORT).show()
+        toast("กำลังค้นหาวิดีโอ…")
         Thread {
             val found = scan()
             runOnUiThread {
-                val current = series.episodes.getOrNull(series.lastIndex)?.uri
                 val known = series.episodes.map { it.uri }.toSet()
                 val fresh = found.filter { it.uri !in known }
                 if (fresh.isEmpty()) {
-                    Toast.makeText(this, "ไม่พบวิดีโอใหม่", Toast.LENGTH_SHORT).show()
+                    toast("ไม่พบวิดีโอใหม่")
                     return@runOnUiThread
                 }
-                val all = MediaScan.sorted(series.episodes + fresh)
-                series.episodes.clear()
-                series.episodes.addAll(all)
-                // Keep "continue watching" pointing at the same file after re-sorting.
-                series.lastIndex = all.indexOfFirst { it.uri == current }.coerceAtLeast(0)
-                Store.put(this, series)
-                render()
-                Toast.makeText(this, "เพิ่ม ${fresh.size} ตอนแล้ว", Toast.LENGTH_SHORT).show()
+                series.editEpisodes { it.addAll(fresh) }
+                save()
+                toast("เพิ่ม ${fresh.size} ตอนต่อท้ายแล้ว (เรียงใหม่ได้จากเมนู)")
             }
         }.start()
-    }
-
-    private fun confirmRemove(index: Int) {
-        val ep = series.episodes[index]
-        AlertDialog.Builder(this)
-            .setMessage("เอา “${ep.name}” ออกจากรายการ?")
-            .setPositiveButton("เอาออก") { _, _ ->
-                series.episodes.removeAt(index)
-                if (series.lastIndex > index) series.lastIndex--
-                if (series.lastIndex == index) series.lastPosition = 0
-                Store.put(this, series)
-                render()
-            }
-            .setNegativeButton("ยกเลิก", null)
-            .show()
     }
 }

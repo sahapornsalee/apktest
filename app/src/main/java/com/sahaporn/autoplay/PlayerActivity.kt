@@ -1,5 +1,7 @@
 package com.sahaporn.autoplay
 
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -29,6 +31,15 @@ class PlayerActivity : AppCompatActivity() {
         const val EXTRA_ID = "series_id"
         const val EXTRA_INDEX = "index"
         const val EXTRA_POSITION = "position"
+
+        fun start(ctx: Context, seriesId: String, index: Int, position: Long) {
+            ctx.startActivity(
+                Intent(ctx, PlayerActivity::class.java)
+                    .putExtra(EXTRA_ID, seriesId)
+                    .putExtra(EXTRA_INDEX, index)
+                    .putExtra(EXTRA_POSITION, position)
+            )
+        }
     }
 
     private lateinit var series: Series
@@ -36,8 +47,6 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var playerView: PlayerView
     private lateinit var topBar: View
     private lateinit var txtTitle: TextView
-    private lateinit var btnToggleIntro: Button
-    private lateinit var btnToggleOutro: Button
 
     private val handler = Handler(Looper.getMainLooper())
     private var introHandled = false
@@ -90,8 +99,6 @@ class PlayerActivity : AppCompatActivity() {
         playerView = findViewById(R.id.playerView)
         topBar = findViewById(R.id.topBar)
         txtTitle = findViewById(R.id.txtTitle)
-        btnToggleIntro = findViewById(R.id.btnToggleIntro)
-        btnToggleOutro = findViewById(R.id.btnToggleOutro)
 
         player = ExoPlayer.Builder(this)
             .setSeekBackIncrementMs(10_000)
@@ -116,94 +123,172 @@ class PlayerActivity : AppCompatActivity() {
         player.prepare()
         player.playWhenReady = true
 
-        setupButtons()
+        findViewById<Button>(R.id.btnClose).setOnClickListener { finish() }
+        findViewById<Button>(R.id.btnMenu).setOnClickListener { showMenu() }
         updateTitle()
     }
 
-    private fun setupButtons() {
-        findViewById<Button>(R.id.btnClose).setOnClickListener { finish() }
-        btnToggleIntro.setOnClickListener {
-            series.skipIntro = !series.skipIntro
-            saveProgress()
-            updateToggleLabels()
+    private fun currentEpisode(): Episode = series.episodes[player.currentMediaItemIndex]
+
+    private fun showMenu() {
+        val pos = player.currentPosition
+        val sec = (pos / 1000).toInt()
+        val now = TimeText.format(sec)
+        val ep = currentEpisode()
+        val introNote = if (series.introEndOf(ep) > series.introStartOf(ep)) {
+            " (${TimeText.format(series.introStartOf(ep))}–${TimeText.format(series.introEndOf(ep))})"
+        } else {
+            " (ยังไม่ได้ตั้ง)"
         }
-        btnToggleOutro.setOnClickListener {
-            series.skipOutro = !series.skipOutro
-            saveProgress()
-            updateToggleLabels()
-        }
-        findViewById<Button>(R.id.btnIntroStart).setOnClickListener {
-            val sec = (player.currentPosition / 1000).toInt()
-            series.introStart = sec
-            if (series.introEnd <= sec) series.introEnd = 0
-            series.skipIntro = true
-            introHandled = true
-            saveProgress()
-            updateToggleLabels()
-            showToast("เพลงเปิดเริ่มที่ ${TimeText.format(sec.toLong())} — ต่อไปกด “จุดจบเพลงเปิด” ตอนเพลงจบ")
-        }
-        findViewById<Button>(R.id.btnIntroEnd).setOnClickListener {
-            val sec = (player.currentPosition / 1000).toInt()
-            if (sec <= series.introStart) {
-                showToast("จุดจบต้องอยู่หลังจุดเริ่ม (${TimeText.format(series.introStart.toLong())})")
-                return@setOnClickListener
-            }
-            series.introEnd = sec
-            series.skipIntro = true
-            introHandled = true
-            saveProgress()
-            updateToggleLabels()
-            showToast(
-                "ตั้งแล้ว: ข้ามเพลงเปิด ${TimeText.format(series.introStart.toLong())}–${TimeText.format(sec.toLong())} ทุกตอน"
+        val outroNote = if (series.outroOf(ep) > 0) " (${TimeText.format(series.outroOf(ep))} สุดท้าย)" else " (ยังไม่ได้ตั้ง)"
+        Dialogs.menu(
+            this, "เมนู · ตอนที่ ${player.currentMediaItemIndex + 1}", listOf(
+                "${if (series.skipIntro) "✅" else "⬜"} ข้ามเพลงเปิด$introNote" to {
+                    series.skipIntro = !series.skipIntro
+                    saveProgress()
+                    showToast(if (series.skipIntro) "เปิดการข้ามเพลงเปิด" else "ปิดการข้ามเพลงเปิด")
+                },
+                "${if (series.skipOutro) "✅" else "⬜"} ข้ามเพลงปิด$outroNote" to {
+                    series.skipOutro = !series.skipOutro
+                    saveProgress()
+                    showToast(if (series.skipOutro) "เปิดการข้ามเพลงปิด" else "ปิดการข้ามเพลงปิด")
+                },
+                "⏱ ตอนนี้ ($now) = จุดเริ่มเพลงเปิด" to { chooseScope { only -> setIntroStart(sec, only) } },
+                "⏱ ตอนนี้ ($now) = จุดจบเพลงเปิด" to { chooseScope { only -> setIntroEnd(sec, only) } },
+                "⏱ ตอนนี้ ($now) = จุดเริ่มเพลงปิด" to { chooseScope { only -> setOutroFrom(pos, only) } },
+                "⚙ พิมพ์เวลาข้ามเพลงเอง" to { chooseScope { only -> editSkipTimes(only) } },
+                "☰ เลือกตอน" to { chooseEpisode() },
+                "⏭ ตอนต่อไป" to {
+                    if (player.hasNextMediaItem()) player.seekToNextMediaItem() else showToast("นี่คือตอนสุดท้ายแล้ว")
+                },
             )
-        }
-        findViewById<Button>(R.id.btnOutroStart).setOnClickListener {
-            val dur = player.duration
-            if (dur == C.TIME_UNSET) return@setOnClickListener
-            val remaining = ((dur - player.currentPosition) / 1000).toInt()
-            if (remaining <= 0) return@setOnClickListener
-            series.outroLength = remaining
-            series.skipOutro = true
-            outroHandled = true
-            saveProgress()
-            updateToggleLabels()
-            showToast("ตั้งแล้ว: ข้าม ${TimeText.format(remaining.toLong())} สุดท้ายของทุกตอน")
-        }
-        findViewById<Button>(R.id.btnNext).setOnClickListener {
-            if (player.hasNextMediaItem()) player.seekToNextMediaItem() else showToast("นี่คือตอนสุดท้ายแล้ว")
-        }
-        updateToggleLabels()
+        )
     }
 
-    private fun updateToggleLabels() {
-        btnToggleIntro.text = if (series.skipIntro) "ข้ามเพลงเปิด: เปิด" else "ข้ามเพลงเปิด: ปิด"
-        btnToggleOutro.text = if (series.skipOutro) "ข้ามเพลงปิด: เปิด" else "ข้ามเพลงปิด: ปิด"
+    private fun chooseScope(onChosen: (Boolean) -> Unit) {
+        Dialogs.menu(
+            this, "ใช้กับ", listOf(
+                "ทุกตอนในเรื่องนี้" to { onChosen(false) },
+                "เฉพาะตอนนี้" to { onChosen(true) },
+            )
+        )
+    }
+
+    private fun setIntroStart(sec: Int, thisOnly: Boolean) {
+        val ep = currentEpisode()
+        if (thisOnly) {
+            ep.introStart = sec
+            if (series.introEndOf(ep) <= sec) ep.introEnd = 0
+        } else {
+            series.introStart = sec
+            if (series.introEnd <= sec) series.introEnd = 0
+        }
+        series.skipIntro = true
+        introHandled = true
+        saveProgress()
+        showToast("เพลงเปิดเริ่มที่ ${TimeText.format(sec)} — ต่อไปตั้ง “จุดจบเพลงเปิด” ตอนเพลงจบ")
+    }
+
+    private fun setIntroEnd(sec: Int, thisOnly: Boolean) {
+        val ep = currentEpisode()
+        val start = if (thisOnly) series.introStartOf(ep) else series.introStart
+        if (sec <= start) {
+            showToast("จุดจบต้องอยู่หลังจุดเริ่ม (${TimeText.format(start)})")
+            return
+        }
+        if (thisOnly) {
+            ep.introStart = start
+            ep.introEnd = sec
+        } else {
+            series.introEnd = sec
+        }
+        series.skipIntro = true
+        introHandled = true
+        saveProgress()
+        val scope = if (thisOnly) "เฉพาะตอนนี้" else "ทุกตอน"
+        showToast("ตั้งแล้ว: ข้ามเพลงเปิด ${TimeText.format(start)}–${TimeText.format(sec)} ($scope)")
+    }
+
+    private fun setOutroFrom(pos: Long, thisOnly: Boolean) {
+        val dur = player.duration
+        if (dur == C.TIME_UNSET) return
+        val remaining = ((dur - pos) / 1000).toInt()
+        if (remaining <= 0) return
+        if (thisOnly) currentEpisode().outroLength = remaining else series.outroLength = remaining
+        series.skipOutro = true
+        outroHandled = true
+        saveProgress()
+        val scope = if (thisOnly) "เฉพาะตอนนี้" else "ทุกตอน"
+        showToast("ตั้งแล้ว: ข้าม ${TimeText.format(remaining)} สุดท้าย ($scope)")
+    }
+
+    private fun editSkipTimes(thisOnly: Boolean) {
+        val ep = currentEpisode()
+        if (thisOnly) {
+            val initial = SkipValues(
+                series.introStartOf(ep), series.introEndOf(ep), series.outroOf(ep), series.skipIntro, series.skipOutro,
+            )
+            Dialogs.skipSettings(
+                this, "ข้ามเพลงเฉพาะตอนนี้", initial, showFlags = false,
+                onReset = {
+                    ep.clearOverride()
+                    saveProgress()
+                },
+            ) { v ->
+                ep.introStart = v.introStart
+                ep.introEnd = v.introEnd
+                ep.outroLength = v.outro
+                saveProgress()
+            }
+        } else {
+            val initial = SkipValues(
+                series.introStart, series.introEnd, series.outroLength, series.skipIntro, series.skipOutro,
+            )
+            Dialogs.skipSettings(this, "ข้ามเพลง (ทุกตอน)", initial, showFlags = true, onReset = null) { v ->
+                series.introStart = v.introStart
+                series.introEnd = v.introEnd
+                series.outroLength = v.outro
+                series.skipIntro = v.skipIntro
+                series.skipOutro = v.skipOutro
+                saveProgress()
+            }
+        }
+    }
+
+    private fun chooseEpisode() {
+        val current = player.currentMediaItemIndex
+        Dialogs.menu(
+            this, "เลือกตอน", series.episodes.mapIndexed { i, e ->
+                "${if (i == current) "▶ " else ""}${i + 1}. ${e.name}" to { player.seekTo(i, 0L) }
+            }
+        )
     }
 
     private fun updateTitle() {
         val i = player.currentMediaItemIndex
         val ep = series.episodes.getOrNull(i) ?: return
-        txtTitle.text = "${series.name} · ตอนที่ ${i + 1}/${series.episodes.size} · ${ep.name}"
+        txtTitle.text = "ตอนที่ ${i + 1}/${series.episodes.size} · ${ep.name}"
     }
 
     private fun checkSkip() {
         if (!::player.isInitialized || finished || player.playbackState != Player.STATE_READY) return
+        val ep = series.episodes.getOrNull(player.currentMediaItemIndex) ?: return
         val pos = player.currentPosition
 
-        if (series.skipIntro && !introHandled && series.introEnd > series.introStart) {
-            val start = series.introStart * 1000L
-            val end = series.introEnd * 1000L
-            if (pos >= end) {
+        val introStart = series.introStartOf(ep) * 1000L
+        val introEnd = series.introEndOf(ep) * 1000L
+        if (series.skipIntro && !introHandled && introEnd > introStart) {
+            if (pos >= introEnd) {
                 introHandled = true
-            } else if (pos >= start) {
+            } else if (pos >= introStart) {
                 introHandled = true
-                player.seekTo(end)
+                player.seekTo(introEnd)
                 showToast("ข้ามเพลงเปิดแล้ว")
             }
         }
 
         val dur = player.duration
-        val outro = series.outroLength * 1000L
+        val outro = series.outroOf(ep) * 1000L
         if (series.skipOutro && !outroHandled && outro > 0 && dur != C.TIME_UNSET && dur > outro) {
             if (pos >= dur - outro) {
                 outroHandled = true

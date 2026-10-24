@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.AutoPlay" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+    <style name="Theme.AutoPlay" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/primary</item>
         <item name="colorPrimaryVariant">@color/primary_dark</item>
         <item name="colorOnPrimary">#FFFFFF</item>

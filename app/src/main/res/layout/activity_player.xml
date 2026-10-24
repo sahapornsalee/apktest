@@ -17,85 +17,35 @@
         android:layout_height="wrap_content"
         android:layout_gravity="top"
         android:background="@color/overlay"
-        android:orientation="vertical"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
         android:paddingStart="24dp"
         android:paddingEnd="24dp">
 
-        <LinearLayout
-            android:layout_width="match_parent"
+        <Button
+            android:id="@+id/btnClose"
+            style="@style/OverlayButton"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:text="✕"
+            android:textSize="18sp" />
 
-            <Button
-                android:id="@+id/btnClose"
-                style="@style/OverlayButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="✕"
-                android:textSize="18sp" />
-
-            <TextView
-                android:id="@+id/txtTitle"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:ellipsize="end"
-                android:singleLine="true"
-                android:textColor="#FFFFFF"
-                android:textSize="15sp" />
-        </LinearLayout>
-
-        <HorizontalScrollView
-            android:layout_width="match_parent"
+        <TextView
+            android:id="@+id/txtTitle"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:scrollbars="none">
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp" />
 
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-
-                <Button
-                    android:id="@+id/btnToggleIntro"
-                    style="@style/OverlayButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" />
-
-                <Button
-                    android:id="@+id/btnToggleOutro"
-                    style="@style/OverlayButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" />
-
-                <Button
-                    android:id="@+id/btnIntroStart"
-                    style="@style/OverlayButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="⏱ จุดเริ่มเพลงเปิด" />
-
-                <Button
-                    android:id="@+id/btnIntroEnd"
-                    style="@style/OverlayButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="⏱ จุดจบเพลงเปิด" />
-
-                <Button
-                    android:id="@+id/btnOutroStart"
-                    style="@style/OverlayButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="⏱ จุดเริ่มเพลงปิด" />
-
-                <Button
-                    android:id="@+id/btnNext"
-                    style="@style/OverlayButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="ตอนต่อไป ⏭" />
-            </LinearLayout>
-        </HorizontalScrollView>
+        <Button
+            android:id="@+id/btnMenu"
+            style="@style/OverlayButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="☰ เมนู"
+            android:textSize="15sp" />
     </LinearLayout>
 </FrameLayout>

@@ -78,8 +78,9 @@ class PlayerActivity : ThemedActivity() {
         /** Opens the series in whichever player suits it (see [Engines]). */
         fun start(ctx: Context, seriesId: String, index: Int, position: Long) {
             val s = Store.get(ctx, seriesId)
-            if (s != null && Engines.useVlc(s, index)) {
-                VlcPlayerActivity.start(ctx, seriesId, index, position)
+            val backup = s?.let { Engines.backupFor(it, index) }
+            if (backup != null) {
+                BackupPlayerActivity.start(ctx, seriesId, index, position, backup)
                 return
             }
             ctx.startActivity(
@@ -204,7 +205,7 @@ class PlayerActivity : ThemedActivity() {
             saveProgress()
             // In automatic mode, formats the main player is weak at continue in VLC.
             if (series.engine == Engines.AUTO && Engines.needsVlc(series.episodes[index])) {
-                switchToVlc(remember = false, software = false)
+                switchToBackup(Engines.VLC, remember = false, software = false)
             }
         }
 
@@ -235,8 +236,9 @@ class PlayerActivity : ThemedActivity() {
         override fun onPlayerError(error: PlaybackException) {
             // Whatever player the series is set to, a clip the main player can't read
             // (e.g. a file whose name says .mp4 but holds another format) goes to VLC.
-            showToast("ตัวเล่นหลักเปิดไฟล์นี้ไม่ได้ · กำลังเปิดด้วยตัวเล่นสำรอง VLC")
-            switchToVlc(remember = false, software = false)
+            // Try the phone's own player first: it handles what the phone's video app can play.
+            showToast("ตัวเล่นหลักเปิดไฟล์นี้ไม่ได้ · กำลังเปิดด้วยตัวเล่นของระบบ")
+            switchToBackup(Engines.SYSTEM, remember = false, software = false)
         }
     }
 
@@ -788,7 +790,7 @@ class PlayerActivity : ThemedActivity() {
                 "⏾ ตั้งเวลาปิด$sleepNote" to { showSleepMenu() },
                 "1️⃣ ดูอีกตอนเดียวแล้วหยุด" to { oneMoreEpisode() },
                 "🗗 ดูแบบจอลอย" to { enterPip() },
-                "🛠 ภาพแตก / เล่นไม่ได้? เปิดด้วยตัวเล่นสำรอง VLC" to { switchToVlc(remember = true, software = true) },
+                "🛠 ภาพแตก / เล่นไม่ได้? เปลี่ยนตัวเล่น" to { chooseBackup() },
                 "${check(series.skipIntro)} ข้ามเพลงเปิด$introNote" to {
                     series.skipIntro = !series.skipIntro
                     saveProgress()
@@ -870,21 +872,34 @@ class PlayerActivity : ThemedActivity() {
         )
     }
 
+    private fun chooseBackup() {
+        Dialogs.menu(
+            this, "เปลี่ยนตัวเล่นของเรื่องนี้", listOf(
+                "📱 ตัวเล่นของระบบ (แนะนำ · แบบเดียวกับแอปวิดีโอในเครื่อง)" to {
+                    switchToBackup(Engines.SYSTEM, remember = true, software = false)
+                },
+                "🧰 VLC ถอดรหัสด้วยซอฟต์แวร์ (เปิดได้แทบทุกไฟล์)" to {
+                    switchToBackup(Engines.VLC, remember = true, software = true)
+                },
+            )
+        )
+    }
+
     /**
-     * Continues this clip in the VLC player. [remember] makes VLC the series' player from now on;
-     * [software] turns off hardware decoding, which fixes blocky or smeared pictures.
+     * Continues this clip in a backup engine. [remember] makes it the series' player from now on;
+     * [software] turns off VLC's hardware decoding, which fixes blocky or smeared pictures.
      */
-    private fun switchToVlc(remember: Boolean, software: Boolean) {
+    private fun switchToBackup(kind: Int, remember: Boolean, software: Boolean) {
         if (finished) return
         val index = player.currentMediaItemIndex
         val position = player.currentPosition
         saveProgress()
-        if (remember) series.engine = Engines.VLC
+        if (remember) series.engine = kind
         if (software) series.vlcHardware = false
         Store.put(this, series)
         finished = true
         player.pause()
-        VlcPlayerActivity.start(this, series.id, index, position)
+        BackupPlayerActivity.start(this, series.id, index, position, kind)
         finish()
     }
 

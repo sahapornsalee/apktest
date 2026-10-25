@@ -134,7 +134,7 @@ class SeriesActivity : ThemedActivity() {
                         save()
                     }
                 },
-                "🎬 ตัวเล่น: ${Engines.NAMES[series.engine.coerceIn(0, 2)]}" to { chooseEngine() },
+                "🎬 ตัวเล่น: ${Engines.NAMES[series.engine.coerceIn(0, Engines.NAMES.size - 1)]}" to { chooseEngine() },
                 "เรียงตอนตามชื่อไฟล์" to {
                     series.editEpisodes { eps ->
                         val sorted = MediaScan.sorted(eps)

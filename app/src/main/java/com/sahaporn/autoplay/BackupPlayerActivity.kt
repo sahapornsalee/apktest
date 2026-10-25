@@ -9,9 +9,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelFileDescriptor
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
@@ -23,36 +23,41 @@ import androidx.activity.OnBackPressedCallback
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import org.videolan.libvlc.LibVLC
-import org.videolan.libvlc.Media
-import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.util.VLCVideoLayout
 
 /**
- * Backup player built on VLC, for files the main player can't open or shows broken.
- * Plays the series back to back with the same skip times and saved progress.
+ * Backup player for files the main player can't open or shows broken. It runs either Android's
+ * own media player (what the phone's video app uses) or VLC, with the same controls, skip times
+ * and saved progress, and falls from the system player to VLC when a clip fails.
  */
-class VlcPlayerActivity : ThemedActivity() {
+class BackupPlayerActivity : ThemedActivity(), EngineHost {
     companion object {
+        private const val EXTRA_ENGINE = "engine"
         private const val SEEK_STEP_MS = 10_000L
         private const val CONTROLS_TIMEOUT_MS = 4_000L
         private val SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
         private val RESIZE_NAMES = listOf("พอดีจอ", "เต็มจอ (ตัดขอบ)", "ยืดเต็มจอ")
 
-        fun start(ctx: Context, seriesId: String, index: Int, position: Long) {
+        /** [engine] is [Engines.SYSTEM] or [Engines.VLC]. */
+        fun start(ctx: Context, seriesId: String, index: Int, position: Long, engine: Int) {
             ctx.startActivity(
-                Intent(ctx, VlcPlayerActivity::class.java)
+                Intent(ctx, BackupPlayerActivity::class.java)
                     .putExtra(PlayerActivity.EXTRA_ID, seriesId)
                     .putExtra(PlayerActivity.EXTRA_INDEX, index)
                     .putExtra(PlayerActivity.EXTRA_POSITION, position)
+                    .putExtra(EXTRA_ENGINE, engine)
             )
         }
+
+        private fun engineName(kind: Int) = if (kind == Engines.SYSTEM) "ตัวเล่นของระบบ" else "ตัวเล่นสำรอง VLC"
     }
 
     private lateinit var series: Series
-    private lateinit var libVlc: LibVLC
-    private lateinit var mp: MediaPlayer
-    private lateinit var videoLayout: VLCVideoLayout
+    private lateinit var engine: ClipEngine
+    private var kind = Engines.VLC
+    private lateinit var videoFrame: View
+    private lateinit var vlcLayout: VLCVideoLayout
+    private lateinit var systemSurface: SurfaceView
     private lateinit var controls: View
     private lateinit var txtTitle: TextView
     private lateinit var btnPlay: ImageButton
@@ -67,11 +72,7 @@ class VlcPlayerActivity : ThemedActivity() {
     private lateinit var btnUnlock: Button
 
     private val handler = Handler(Looper.getMainLooper())
-    private var fd: ParcelFileDescriptor? = null
     private var index = 0
-
-    /** Where to jump once the clip starts playing; VLC can't seek before that. */
-    private var startAt = 0L
     private var ended = false
     private var introHandled = false
     private var outroHandled = false
@@ -87,7 +88,9 @@ class VlcPlayerActivity : ThemedActivity() {
         override fun run() {
             checkSkip()
             updateProgressUi()
-            if (::mp.isInitialized && mp.isPlaying && System.currentTimeMillis() - lastSavedAt > 5_000) saveProgress()
+            if (::engine.isInitialized && engine.isPlaying && System.currentTimeMillis() - lastSavedAt > 5_000) {
+                saveProgress()
+            }
             handler.postDelayed(this, 250)
         }
     }
@@ -104,7 +107,7 @@ class VlcPlayerActivity : ThemedActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_vlc)
+        setContentView(R.layout.activity_backup)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUi()
 
@@ -115,7 +118,9 @@ class VlcPlayerActivity : ThemedActivity() {
         }
         series = s
 
-        videoLayout = findViewById(R.id.videoLayout)
+        videoFrame = findViewById(R.id.videoFrame)
+        vlcLayout = findViewById(R.id.vlcLayout)
+        systemSurface = findViewById(R.id.systemSurface)
         controls = findViewById(R.id.controls)
         txtTitle = findViewById(R.id.txtTitle)
         btnPlay = findViewById(R.id.btnPlay)
@@ -129,21 +134,33 @@ class VlcPlayerActivity : ThemedActivity() {
         btnSkip = findViewById(R.id.btnSkip)
         btnUnlock = findViewById(R.id.btnUnlock)
 
-        libVlc = LibVLC(this, arrayListOf("--no-drop-late-frames", "--no-skip-frames"))
-        mp = MediaPlayer(libVlc)
-        mp.attachViews(videoLayout, null, true, false)
-        mp.setEventListener { event -> handler.post { onVlcEvent(event) } }
-
         setupControls()
         setupGestures()
         onBackPressedDispatcher.addCallback(this, lockedBack)
-        applyScale()
-        applyOrientation()
+        videoFrame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            if (::engine.isInitialized) engine.setScale(series.resizeMode)
+        }
 
+        useEngine(intent.getIntExtra(EXTRA_ENGINE, Engines.VLC))
+        applyOrientation()
         val start = intent.getIntExtra(PlayerActivity.EXTRA_INDEX, 0).coerceIn(0, s.episodes.size - 1)
         open(start, intent.getLongExtra(PlayerActivity.EXTRA_POSITION, 0L))
         setControlsVisible(true)
-        showToast("ตัวเล่นสำรอง VLC" + if (series.vlcHardware) "" else " · ถอดรหัสด้วยซอฟต์แวร์")
+        showToast(engineName(kind) + if (kind == Engines.VLC && !series.vlcHardware) " · ถอดรหัสด้วยซอฟต์แวร์" else "")
+    }
+
+    /** Swaps the playback engine; the caller reopens the clip afterwards. */
+    private fun useEngine(newKind: Int) {
+        if (::engine.isInitialized) engine.release()
+        kind = if (newKind == Engines.SYSTEM) Engines.SYSTEM else Engines.VLC
+        vlcLayout.visibility = if (kind == Engines.VLC) View.VISIBLE else View.GONE
+        systemSurface.visibility = if (kind == Engines.SYSTEM) View.VISIBLE else View.GONE
+        engine = if (kind == Engines.SYSTEM) {
+            SystemEngine(this, systemSurface, this)
+        } else {
+            VlcEngine(this, vlcLayout, series.vlcHardware, this, handler)
+        }
+        engine.setScale(series.resizeMode)
     }
 
     private fun currentEpisode() = series.episodes[index]
@@ -154,25 +171,12 @@ class VlcPlayerActivity : ThemedActivity() {
         introHandled = false
         outroHandled = false
         val ep = series.episodes[i]
-        fd?.close()
-        fd = try {
-            contentResolver.openFileDescriptor(Uri.parse(ep.uri), "r")
-        } catch (e: Exception) {
-            null
-        }
-        val file = fd
-        if (file == null) {
+        if (!engine.open(Uri.parse(ep.uri), position.coerceAtLeast(0L))) {
             showToast("เปิดไฟล์ไม่ได้ (อาจถูกย้ายหรือลบ): ${ep.shortName}")
             skipBrokenClip()
             return
         }
-        val media = Media(libVlc, file.fileDescriptor)
-        media.setHWDecoderEnabled(series.vlcHardware, false)
-        mp.setMedia(media)
-        media.release()
-        startAt = position.coerceAtLeast(0L)
-        mp.setRate(series.speed)
-        mp.play()
+        engine.setSpeed(series.speed)
         series.lastIndex = i
         series.lastWatchedAt = System.currentTimeMillis()
         Store.put(this, series)
@@ -188,35 +192,48 @@ class VlcPlayerActivity : ThemedActivity() {
         }
     }
 
-    private fun onVlcEvent(event: MediaPlayer.Event) {
-        if (finished || isDestroyed) return
-        when (event.type) {
-            MediaPlayer.Event.Playing -> {
-                failures = 0
-                buffering.visibility = View.GONE
-                if (startAt > 0) {
-                    mp.setTime(startAt)
-                    startAt = 0L
-                }
-                btnPlay.setImageResource(R.drawable.ic_pause)
-                scheduleHide()
-            }
-            MediaPlayer.Event.Paused -> {
-                btnPlay.setImageResource(R.drawable.ic_play)
-                setControlsVisible(true)
-            }
-            MediaPlayer.Event.Buffering ->
-                buffering.visibility = if (event.buffering < 100f) View.VISIBLE else View.GONE
-            MediaPlayer.Event.Vout -> applyOrientation()
-            MediaPlayer.Event.EndReached -> {
-                ended = true
-                btnPlay.setImageResource(R.drawable.ic_play)
-                onClipEnded(currentEpisode().duration, currentEpisode().duration, natural = true)
-            }
-            MediaPlayer.Event.EncounteredError -> {
-                showToast("VLC เปิดไฟล์นี้ไม่ได้: ${currentEpisode().shortName}")
-                skipBrokenClip()
-            }
+    // ---- Engine events ----
+
+    override fun onEnginePlaying() {
+        failures = 0
+        buffering.visibility = View.GONE
+        btnPlay.setImageResource(R.drawable.ic_pause)
+        scheduleHide()
+    }
+
+    override fun onEnginePaused() {
+        btnPlay.setImageResource(R.drawable.ic_play)
+        setControlsVisible(true)
+    }
+
+    override fun onEngineBuffering(busy: Boolean) {
+        buffering.visibility = if (busy) View.VISIBLE else View.GONE
+    }
+
+    override fun onEngineVideoSize() {
+        applyOrientation()
+        engine.setScale(series.resizeMode)
+    }
+
+    override fun onEngineEnded() {
+        if (finished) return
+        ended = true
+        btnPlay.setImageResource(R.drawable.ic_play)
+        val d = currentEpisode().duration
+        onClipEnded(d, d, natural = true)
+    }
+
+    override fun onEngineError() {
+        if (finished) return
+        if (kind == Engines.SYSTEM) {
+            // The phone's own decoder gave up; VLC may still manage it.
+            showToast("ตัวเล่นของระบบเปิดไม่ได้ · ลองด้วย VLC")
+            val pos = engine.time
+            useEngine(Engines.VLC)
+            open(index, pos)
+        } else {
+            showToast("เปิดไฟล์นี้ไม่ได้: ${currentEpisode().shortName}")
+            skipBrokenClip()
         }
     }
 
@@ -227,7 +244,7 @@ class VlcPlayerActivity : ThemedActivity() {
         Store.put(this, series)
         when {
             !series.autoPlay -> {
-                if (!natural) mp.pause()
+                if (!natural) engine.pause()
                 setControlsVisible(true)
                 showToast(if (index + 1 < series.episodes.size) "จบตอนนี้แล้ว · กด ⏭ เพื่อดูตอนต่อไป" else "จบตอนสุดท้ายแล้ว 🎉")
             }
@@ -256,10 +273,10 @@ class VlcPlayerActivity : ThemedActivity() {
     // ---- Skip times ----
 
     private fun checkSkip() {
-        if (!::mp.isInitialized || finished || ended || startAt > 0 || !mp.isPlaying) return
+        if (!::engine.isInitialized || finished || ended || !engine.isPlaying) return
         val ep = currentEpisode()
-        val pos = mp.time
-        val dur = mp.length
+        val pos = engine.time
+        val dur = engine.length
         if (dur > 0) ep.duration = dur
         val introStart = series.introStartOf(ep) * 1000L
         val introEnd = series.introEndOf(ep) * 1000L
@@ -271,10 +288,10 @@ class VlcPlayerActivity : ThemedActivity() {
         if (series.skipManual) {
             when {
                 hasIntro && pos >= introStart && pos < introEnd - 1_000 ->
-                    showSkipButton("ข้ามเพลงเปิด ⏭") { mp.setTime(introEnd) }
+                    showSkipButton("ข้ามเพลงเปิด ⏭") { engine.seek(introEnd) }
                 hasOutro && pos >= outroStart ->
                     showSkipButton(if (index + 1 < series.episodes.size) "ตอนต่อไป ⏭" else "จบเรื่อง ⏹") {
-                        onClipEnded(mp.time, mp.length, natural = false)
+                        onClipEnded(engine.time, engine.length, natural = false)
                     }
                 else -> hideSkipButton()
             }
@@ -285,7 +302,7 @@ class VlcPlayerActivity : ThemedActivity() {
                 introHandled = true
             } else if (pos >= introStart) {
                 introHandled = true
-                mp.setTime(introEnd)
+                engine.seek(introEnd)
                 showToast("ข้ามเพลงเปิดแล้ว")
             }
         }
@@ -307,9 +324,9 @@ class VlcPlayerActivity : ThemedActivity() {
         if (::btnSkip.isInitialized) btnSkip.visibility = View.GONE
     }
 
-    private fun setSkipPoint(kind: Int) {
-        val sec = (mp.time / 1000).toInt()
-        when (kind) {
+    private fun setSkipPoint(kindOfPoint: Int) {
+        val sec = (engine.time / 1000).toInt()
+        when (kindOfPoint) {
             0 -> {
                 series.introStart = sec
                 if (series.introEnd <= sec) series.introEnd = 0
@@ -324,14 +341,14 @@ class VlcPlayerActivity : ThemedActivity() {
                 showToast("ข้ามเพลงเปิด ${TimeText.format(series.introStart)}–${TimeText.format(sec)} (ทุกตอน)")
             }
             else -> {
-                val remaining = ((mp.length - mp.time) / 1000).toInt()
+                val remaining = ((engine.length - engine.time) / 1000).toInt()
                 if (remaining <= 0) return
                 series.outroLength = remaining
                 outroHandled = true
                 showToast("ข้าม ${TimeText.format(remaining)} สุดท้าย (ทุกตอน)")
             }
         }
-        if (kind < 2) {
+        if (kindOfPoint < 2) {
             series.skipIntro = true
             introHandled = true
         } else {
@@ -362,8 +379,8 @@ class VlcPlayerActivity : ThemedActivity() {
         tap(R.id.btnPlay) {
             when {
                 ended -> if (index + 1 < series.episodes.size) goTo(index + 1) else open(index, 0L)
-                mp.isPlaying -> mp.pause()
-                else -> mp.play()
+                engine.isPlaying -> engine.pause()
+                else -> engine.play()
             }
         }
         tap(R.id.btnRew) { seekBy(-SEEK_STEP_MS) }
@@ -398,7 +415,7 @@ class VlcPlayerActivity : ThemedActivity() {
 
             override fun onStopTrackingTouch(bar: SeekBar) {
                 dragging = false
-                mp.setTime(bar.progress * 1000L)
+                engine.seek(bar.progress * 1000L)
                 scheduleHide()
             }
         })
@@ -421,11 +438,11 @@ class VlcPlayerActivity : ThemedActivity() {
             }
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                if (!locked) seekBy(if (e.x > videoLayout.width / 2f) SEEK_STEP_MS else -SEEK_STEP_MS)
+                if (!locked) seekBy(if (e.x > videoFrame.width / 2f) SEEK_STEP_MS else -SEEK_STEP_MS)
                 return true
             }
         })
-        videoLayout.setOnTouchListener { _, event ->
+        videoFrame.setOnTouchListener { _, event ->
             detector.onTouchEvent(event)
             true
         }
@@ -444,13 +461,13 @@ class VlcPlayerActivity : ThemedActivity() {
 
     private fun scheduleHide() {
         handler.removeCallbacks(hideControls)
-        if (::mp.isInitialized && mp.isPlaying && !dragging) handler.postDelayed(hideControls, CONTROLS_TIMEOUT_MS)
+        if (::engine.isInitialized && engine.isPlaying && !dragging) handler.postDelayed(hideControls, CONTROLS_TIMEOUT_MS)
     }
 
     private fun updateProgressUi() {
-        if (!::mp.isInitialized || dragging || controls.visibility != View.VISIBLE) return
-        val pos = mp.time.coerceAtLeast(0L)
-        val dur = mp.length
+        if (!::engine.isInitialized || dragging || controls.visibility != View.VISIBLE) return
+        val pos = engine.time
+        val dur = engine.length
         txtPosition.text = TimeText.ms(pos)
         if (dur > 0) {
             seekBar.max = (dur / 1000).toInt()
@@ -462,11 +479,11 @@ class VlcPlayerActivity : ThemedActivity() {
     }
 
     private fun seekBy(delta: Long) {
-        val dur = mp.length
-        var target = mp.time + delta
+        val dur = engine.length
+        var target = engine.time + delta
         if (dur > 0) target = target.coerceAtMost(dur - 500)
         target = target.coerceAtLeast(0L)
-        mp.setTime(target)
+        engine.seek(target)
         txtSeek.text = "${if (delta > 0) "⏩ +10 วินาที" else "⏪ −10 วินาที"}\n${TimeText.ms(target)}"
         txtSeek.visibility = View.VISIBLE
         handler.removeCallbacks(hideSeek)
@@ -503,19 +520,9 @@ class VlcPlayerActivity : ThemedActivity() {
 
     // ---- Picture, speed, tracks ----
 
-    private fun applyScale() {
-        mp.setVideoScale(
-            when (series.resizeMode) {
-                1 -> MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
-                2 -> MediaPlayer.ScaleType.SURFACE_FILL
-                else -> MediaPlayer.ScaleType.SURFACE_BEST_FIT
-            }
-        )
-    }
-
     private fun setResize(mode: Int) {
         series.resizeMode = mode
-        applyScale()
+        engine.setScale(mode)
         saveProgress()
         showToast("ขนาดภาพ: ${RESIZE_NAMES[mode]}")
     }
@@ -526,8 +533,8 @@ class VlcPlayerActivity : ThemedActivity() {
             2 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
             3 -> ActivityInfo.SCREEN_ORIENTATION_FULL_USER
             else -> {
-                val track = if (::mp.isInitialized) mp.currentVideoTrack else null
-                if (track != null && track.height > track.width) {
+                val portrait = if (::engine.isInitialized) engine.isPortraitVideo() else null
+                if (portrait == true) {
                     ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
                 } else {
                     ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -566,7 +573,7 @@ class VlcPlayerActivity : ThemedActivity() {
             val label = speedText(x) + if (x == 1f) " (ปกติ)" else ""
             (if (x == series.speed) "✓ $label" else label) to {
                 series.speed = x
-                mp.setRate(x)
+                engine.setSpeed(x)
                 updateSpeedLabel()
                 saveProgress()
             }
@@ -574,16 +581,7 @@ class VlcPlayerActivity : ThemedActivity() {
     }
 
     private fun chooseTracks() {
-        val items = mutableListOf<Pair<CharSequence, () -> Unit>>()
-        val audio = mp.audioTrack
-        mp.audioTracks?.filter { it.id >= 0 }?.forEach { t ->
-            items.add("${if (t.id == audio) "✓" else "   "} 🔊 ${t.name}" to { mp.setAudioTrack(t.id) })
-        }
-        val spu = mp.spuTrack
-        mp.spuTracks?.forEach { t ->
-            val name = if (t.id < 0) "ปิดซับไตเติล" else t.name
-            items.add("${if (t.id == spu) "✓" else "   "} 💬 $name" to { mp.setSpuTrack(t.id) })
-        }
+        val items = engine.trackItems()
         if (items.isEmpty()) {
             showToast("ไฟล์นี้ไม่มีเสียงหรือซับไตเติลให้เลือก")
             return
@@ -600,16 +598,19 @@ class VlcPlayerActivity : ThemedActivity() {
     private fun check(on: Boolean) = if (on) "✅" else "⬜"
 
     private fun showMenu() {
-        val now = TimeText.ms(mp.time)
-        Dialogs.menu(
-            this, "เมนู · ตัวเล่นสำรอง VLC", listOf(
-                "${check(!series.vlcHardware)} ถอดรหัสด้วยซอฟต์แวร์ (แก้ภาพแตก กินแบตขึ้น)" to {
-                    series.vlcHardware = !series.vlcHardware
-                    val pos = mp.time
-                    saveProgress()
-                    open(index, pos)
-                    showToast(if (series.vlcHardware) "ใช้ฮาร์ดแวร์ถอดรหัส" else "ถอดรหัสด้วยซอฟต์แวร์")
-                },
+        val now = TimeText.ms(engine.time)
+        val items = mutableListOf<Pair<CharSequence, () -> Unit>>(
+            "🎬 เปลี่ยนตัวเล่น (ตอนนี้: ${engineName(kind)})" to { chooseEngine() },
+        )
+        if (kind == Engines.VLC) {
+            items.add("${check(!series.vlcHardware)} ถอดรหัสด้วยซอฟต์แวร์ (แก้ภาพแตก กินแบตขึ้น)" to {
+                series.vlcHardware = !series.vlcHardware
+                reopenWith(Engines.VLC)
+                showToast(if (series.vlcHardware) "ใช้ฮาร์ดแวร์ถอดรหัส" else "ถอดรหัสด้วยซอฟต์แวร์")
+            })
+        }
+        items.addAll(
+            listOf(
                 "${check(series.autoPlay)} เล่นตอนต่อไปอัตโนมัติ" to {
                     series.autoPlay = !series.autoPlay
                     saveProgress()
@@ -625,13 +626,37 @@ class VlcPlayerActivity : ThemedActivity() {
                 "⏱ ตอนนี้ ($now) = จุดเริ่มเพลงเปิด" to { setSkipPoint(0) },
                 "⏱ ตอนนี้ ($now) = จุดจบเพลงเปิด" to { setSkipPoint(1) },
                 "⏱ ตอนนี้ ($now) = จุดเริ่มเพลงปิด" to { setSkipPoint(2) },
-                "↩ กลับไปใช้ตัวเล่นหลัก (ฟีเจอร์ครบ)" to { switchToMain() },
+            )
+        )
+        Dialogs.menu(this, "เมนู · ${engineName(kind)}", items)
+    }
+
+    /** Picks a player for this series from now on. */
+    private fun chooseEngine() {
+        Dialogs.menu(
+            this, "เลือกตัวเล่น", listOf(
+                "📱 ตัวเล่นของระบบ (แบบเดียวกับแอปวิดีโอในเครื่อง)" to {
+                    series.engine = Engines.SYSTEM
+                    reopenWith(Engines.SYSTEM)
+                },
+                "🧰 VLC (เปิดได้แทบทุกไฟล์)" to {
+                    series.engine = Engines.VLC
+                    reopenWith(Engines.VLC)
+                },
+                "⭐ ตัวเล่นหลัก (ฟีเจอร์ครบ)" to { switchToMain() },
             )
         )
     }
 
+    private fun reopenWith(newKind: Int) {
+        val pos = engine.time
+        saveProgress()
+        useEngine(newKind)
+        open(index, pos)
+    }
+
     private fun switchToMain() {
-        val pos = mp.time
+        val pos = engine.time
         saveProgress()
         series.engine = Engines.MAIN
         Store.put(this, series)
@@ -643,8 +668,8 @@ class VlcPlayerActivity : ThemedActivity() {
     // ---- Progress and lifecycle ----
 
     private fun saveProgress() {
-        if (!::mp.isInitialized || finished || startAt > 0) return
-        series.recordProgress(currentEpisode(), mp.time.coerceAtLeast(0L), mp.length, ended = ended)
+        if (!::engine.isInitialized || finished) return
+        series.recordProgress(currentEpisode(), engine.time, engine.length, ended = ended)
         series.lastIndex = index
         series.lastWatchedAt = System.currentTimeMillis()
         lastSavedAt = series.lastWatchedAt
@@ -678,22 +703,15 @@ class VlcPlayerActivity : ThemedActivity() {
     override fun onStop() {
         super.onStop()
         handler.removeCallbacks(ticker)
-        if (::mp.isInitialized) {
+        if (::engine.isInitialized) {
             saveProgress()
-            mp.pause()
+            engine.pause()
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
-        if (::mp.isInitialized) {
-            mp.setEventListener(null)
-            mp.stop()
-            mp.detachViews()
-            mp.release()
-            libVlc.release()
-        }
-        fd?.close()
+        if (::engine.isInitialized) engine.release()
     }
 }

@@ -299,16 +299,21 @@ object Store {
     }
 }
 
-/** Which player opens a series: ExoPlayer (full features) or VLC (plays nearly any file). */
+/**
+ * Which player opens a series: the main one (ExoPlayer, full features), Android's own player
+ * (same as the phone's video app) or VLC (plays nearly any file).
+ */
 object Engines {
     const val AUTO = 0
     const val MAIN = 1
     const val VLC = 2
+    const val SYSTEM = 3
 
     val NAMES = listOf(
         "อัตโนมัติ (เลือกให้ตามชนิดไฟล์)",
         "ตัวเล่นหลัก (ฟีเจอร์ครบ)",
         "ตัวเล่นสำรอง VLC (เปิดได้แทบทุกไฟล์)",
+        "ตัวเล่นของระบบ (แบบเดียวกับแอปวิดีโอในเครื่อง)",
     )
 
     /** Formats the main player handles poorly or not at all. */
@@ -319,10 +324,12 @@ object Engines {
 
     fun needsVlc(ep: Episode) = ep.name.substringAfterLast('.', "").lowercase() in VLC_EXT
 
-    fun useVlc(s: Series, index: Int): Boolean = when (s.engine) {
-        VLC -> true
-        MAIN -> false
-        else -> s.episodes.getOrNull(index)?.let { needsVlc(it) } ?: false
+    /** The backup engine ([VLC] or [SYSTEM]) a clip should open in, or null for the main player. */
+    fun backupFor(s: Series, index: Int): Int? = when (s.engine) {
+        VLC -> VLC
+        SYSTEM -> SYSTEM
+        MAIN -> null
+        else -> if (s.episodes.getOrNull(index)?.let { needsVlc(it) } == true) VLC else null
     }
 }
 

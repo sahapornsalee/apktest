@@ -4,10 +4,24 @@
     android:layout_height="match_parent"
     android:background="@android:color/black">
 
-    <org.videolan.libvlc.util.VLCVideoLayout
-        android:id="@+id/videoLayout"
+    <FrameLayout
+        android:id="@+id/videoFrame"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent">
+
+        <org.videolan.libvlc.util.VLCVideoLayout
+            android:id="@+id/vlcLayout"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
+        <SurfaceView
+            android:id="@+id/systemSurface"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="center"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <ProgressBar
         android:id="@+id/buffering"

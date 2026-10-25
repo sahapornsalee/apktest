@@ -34,7 +34,7 @@
             android:theme="@style/Theme.AutoPlay.Player" />
 
         <activity
-            android:name=".VlcPlayerActivity"
+            android:name=".BackupPlayerActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="false"
             android:theme="@style/Theme.AutoPlay.Player" />

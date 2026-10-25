@@ -92,6 +92,13 @@ class PlayerActivity : AppCompatActivity() {
             saveProgress()
         }
 
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            // With auto-play off the player stops at the end of each clip instead of moving on.
+            if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
+                stopAtEndOfClip(player.currentPosition, player.duration)
+            }
+        }
+
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
                 record(currentEpisode(), player.currentPosition, player.duration, ended = true)
@@ -145,6 +152,7 @@ class PlayerActivity : AppCompatActivity() {
         val startIndex = intent.getIntExtra(EXTRA_INDEX, 0).coerceIn(0, items.size - 1)
         val startPos = intent.getLongExtra(EXTRA_POSITION, 0L).coerceAtLeast(0L)
         player.addListener(listener)
+        player.pauseAtEndOfMediaItems = !s.autoPlay
         player.setMediaItems(items, startIndex, startPos)
         player.prepare()
         player.playWhenReady = true
@@ -178,6 +186,15 @@ class PlayerActivity : AppCompatActivity() {
                     series.skipOutro = !series.skipOutro
                     saveProgress()
                     showToast(if (series.skipOutro) "เปิดการข้ามเพลงปิด" else "ปิดการข้ามเพลงปิด")
+                },
+                "${if (series.autoPlay) "✅" else "⬜"} เล่นตอนต่อไปอัตโนมัติ" to {
+                    series.autoPlay = !series.autoPlay
+                    player.pauseAtEndOfMediaItems = !series.autoPlay
+                    saveProgress()
+                    showToast(
+                        if (series.autoPlay) "เปิดเล่นต่ออัตโนมัติ: จบตอนแล้วไปตอนต่อไปเลย"
+                        else "ปิดเล่นต่ออัตโนมัติ: จบตอนแล้วจะหยุดรอ"
+                    )
                 },
                 "⏱ ตอนนี้ ($now) = จุดเริ่มเพลงเปิด" to { chooseScope { only -> setIntroStart(sec, only) } },
                 "⏱ ตอนนี้ ($now) = จุดจบเพลงเปิด" to { chooseScope { only -> setIntroEnd(sec, only) } },
@@ -320,7 +337,9 @@ class PlayerActivity : AppCompatActivity() {
         if (series.skipOutro && !outroHandled && outro > 0 && dur != C.TIME_UNSET && dur > outro) {
             if (pos >= dur - outro) {
                 outroHandled = true
-                if (player.hasNextMediaItem()) {
+                if (!series.autoPlay) {
+                    stopAtEndOfClip(pos, dur)
+                } else if (player.hasNextMediaItem()) {
                     showToast("ข้ามเพลงปิด ▶ ตอนต่อไป")
                     player.seekToNextMediaItem()
                 } else {
@@ -354,6 +373,17 @@ class PlayerActivity : AppCompatActivity() {
             ep.position = position
             if (position >= 5_000) ep.watched = false
         }
+    }
+
+    /** Auto-play off: pause, count the clip as watched and wait for the user. */
+    private fun stopAtEndOfClip(position: Long, duration: Long) {
+        player.pause()
+        val ep = currentEpisode()
+        record(ep, position, duration, ended = true)
+        series.lastWatchedAt = System.currentTimeMillis()
+        Store.put(this, series)
+        playerView.showController()
+        showToast(if (player.hasNextMediaItem()) "จบตอนนี้แล้ว · กด ⏭ เพื่อดูตอนต่อไป" else "จบตอนสุดท้ายแล้ว 🎉")
     }
 
     private fun onSeriesFinished() {

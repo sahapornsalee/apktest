@@ -70,6 +70,7 @@ class Series(
     var outroLength: Int = 0,
     var skipIntro: Boolean = true,
     var skipOutro: Boolean = true,
+    var autoPlay: Boolean = true,
     var lastIndex: Int = 0,
     var lastWatchedAt: Long = 0L,
 ) {
@@ -113,6 +114,7 @@ class Series(
         put("outroLength", outroLength)
         put("skipIntro", skipIntro)
         put("skipOutro", skipOutro)
+        put("autoPlay", autoPlay)
         put("lastIndex", lastIndex)
         put("lastWatchedAt", lastWatchedAt)
         put("episodes", JSONArray().apply { episodes.forEach { put(it.toJson()) } })
@@ -136,6 +138,7 @@ class Series(
                 outroLength = o.optInt("outroLength", 0),
                 skipIntro = o.optBoolean("skipIntro", true),
                 skipOutro = o.optBoolean("skipOutro", true),
+                autoPlay = o.optBoolean("autoPlay", true),
                 lastIndex = lastIndex,
                 lastWatchedAt = o.optLong("lastWatchedAt", 0L),
             )

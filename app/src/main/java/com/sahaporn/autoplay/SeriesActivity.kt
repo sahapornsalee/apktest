@@ -8,6 +8,7 @@ import android.widget.ListView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import com.google.android.material.appbar.MaterialToolbar
 
 class SeriesActivity : AppCompatActivity() {
@@ -26,6 +27,7 @@ class SeriesActivity : AppCompatActivity() {
     private lateinit var series: Series
     private lateinit var txtInfo: TextView
     private lateinit var btnResume: Button
+    private lateinit var swAutoPlay: SwitchCompat
     private lateinit var adapter: RowAdapter
 
     private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -53,6 +55,7 @@ class SeriesActivity : AppCompatActivity() {
         seriesId = intent.getStringExtra(EXTRA_ID) ?: run { finish(); return }
         txtInfo = findViewById(R.id.txtInfo)
         btnResume = findViewById(R.id.btnResume)
+        swAutoPlay = findViewById(R.id.swAutoPlay)
         adapter = RowAdapter(this)
         findViewById<ListView>(R.id.list).adapter = adapter
 
@@ -137,6 +140,13 @@ class SeriesActivity : AppCompatActivity() {
         }
         val cat = series.category.ifEmpty { "ไม่มีหมวดหมู่" }
         txtInfo.text = "📁 $cat · ${series.episodes.size} ตอน · ดูจบแล้ว ${series.watchedCount} ตอน\n$intro\n$outro"
+        swAutoPlay.setOnCheckedChangeListener(null)
+        swAutoPlay.isChecked = series.autoPlay
+        swAutoPlay.setOnCheckedChangeListener { _, checked ->
+            series.autoPlay = checked
+            Store.put(this, series)
+            toast(if (checked) "จบตอนแล้วไปตอนต่อไปเลย" else "จบตอนแล้วจะหยุดรอ")
+        }
 
         if (series.lastIndex >= series.episodes.size) series.lastIndex = 0
         btnResume.isEnabled = series.episodes.isNotEmpty()

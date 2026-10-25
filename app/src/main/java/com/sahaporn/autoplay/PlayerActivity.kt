@@ -24,6 +24,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import kotlin.math.abs
 
 @OptIn(UnstableApi::class)
 class PlayerActivity : AppCompatActivity() {
@@ -54,8 +55,15 @@ class PlayerActivity : AppCompatActivity() {
     private var finished = false
     private var toast: Toast? = null
 
+    // Last known spot of the clip being played, so it can be saved after the player has moved on.
+    private var trackedIndex = -1
+    private var trackedPosition = 0L
+    private var trackedDuration = C.TIME_UNSET
+    private var lastSavedAt = 0L
+
     private val ticker = object : Runnable {
         override fun run() {
+            track()
             checkSkip()
             handler.postDelayed(this, 250)
         }
@@ -63,14 +71,32 @@ class PlayerActivity : AppCompatActivity() {
 
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            val index = player.currentMediaItemIndex
+            if (trackedIndex in series.episodes.indices && trackedIndex != index) {
+                record(
+                    series.episodes[trackedIndex], trackedPosition, trackedDuration,
+                    ended = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO,
+                )
+            }
+            trackedIndex = index
+            trackedPosition = player.currentPosition
+            trackedDuration = C.TIME_UNSET
             introHandled = false
             outroHandled = false
+            // Moving to another clip (auto-next, next button, chosen from the list) resumes where it was left.
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) {
+                val resume = series.episodes[index].resumePosition
+                if (resume > 0 && abs(player.currentPosition - resume) > 2_000) player.seekTo(resume)
+            }
             updateTitle()
             saveProgress()
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_ENDED) onSeriesFinished()
+            if (playbackState == Player.STATE_ENDED) {
+                record(currentEpisode(), player.currentPosition, player.duration, ended = true)
+                onSeriesFinished()
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -259,7 +285,9 @@ class PlayerActivity : AppCompatActivity() {
         val current = player.currentMediaItemIndex
         Dialogs.menu(
             this, "เลือกตอน", series.episodes.mapIndexed { i, e ->
-                "${if (i == current) "▶ " else ""}${i + 1}. ${e.name}" to { player.seekTo(i, 0L) }
+                "${if (i == current) "▶ " else ""}${i + 1}. ${e.name} · ${TimeText.progress(e)}" to {
+                    player.seekTo(i, e.resumePosition)
+                }
             }
         )
     }
@@ -297,18 +325,41 @@ class PlayerActivity : AppCompatActivity() {
                     player.seekToNextMediaItem()
                 } else {
                     player.pause()
+                    record(ep, pos, dur, ended = true)
                     onSeriesFinished()
                 }
             }
         }
     }
 
+    private fun track() {
+        if (!::player.isInitialized || finished || player.currentMediaItemIndex != trackedIndex) return
+        trackedPosition = player.currentPosition
+        if (player.duration != C.TIME_UNSET) trackedDuration = player.duration
+        val now = System.currentTimeMillis()
+        if (player.isPlaying && now - lastSavedAt > 5_000) saveProgress()
+    }
+
+    /** Saves a clip's spot; near the end (or past the outro) it counts as watched. */
+    private fun record(ep: Episode, position: Long, duration: Long, ended: Boolean) {
+        if (duration != C.TIME_UNSET && duration > 0) ep.duration = duration
+        val d = ep.duration
+        val outro = series.outroOf(ep) * 1000L
+        val nearEnd = ended || (d > 0 && (position >= d * 95 / 100 ||
+            (series.skipOutro && outro > 0 && position >= d - outro - 1_500)))
+        if (nearEnd) {
+            ep.watched = true
+            ep.position = 0L
+        } else {
+            ep.position = position
+            if (position >= 5_000) ep.watched = false
+        }
+    }
+
     private fun onSeriesFinished() {
         if (finished) return
         finished = true
-        // Start over from episode 1 next time, for a rewatch.
-        series.lastIndex = 0
-        series.lastPosition = 0
+        series.lastWatchedAt = System.currentTimeMillis()
         Store.put(this, series)
         showToast("ดูครบทุกตอนแล้ว 🎉")
         finish()
@@ -316,8 +367,12 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun saveProgress() {
         if (!::player.isInitialized || finished) return
-        series.lastIndex = player.currentMediaItemIndex
-        series.lastPosition = player.currentPosition
+        val index = player.currentMediaItemIndex
+        val ep = series.episodes.getOrNull(index) ?: return
+        record(ep, player.currentPosition, player.duration, ended = false)
+        series.lastIndex = index
+        series.lastWatchedAt = System.currentTimeMillis()
+        lastSavedAt = series.lastWatchedAt
         Store.put(this, series)
     }
 

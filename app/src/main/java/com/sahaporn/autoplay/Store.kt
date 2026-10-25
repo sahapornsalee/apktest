@@ -5,20 +5,33 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-/** Skip times left null fall back to the series-wide values. */
+/** Skip times left null fall back to the series-wide values. Progress is kept per clip. */
 data class Episode(
     val uri: String,
     var name: String,
     var introStart: Int? = null,
     var introEnd: Int? = null,
     var outroLength: Int? = null,
+    var position: Long = 0L,
+    var duration: Long = 0L,
+    var watched: Boolean = false,
 ) {
     val hasOverride: Boolean get() = introStart != null || introEnd != null || outroLength != null
+
+    /** Where to start this clip: its saved spot, or the beginning once it was finished. */
+    val resumePosition: Long get() = if (watched) 0L else position
+
+    val hasProgress: Boolean get() = watched || position >= 5_000
 
     fun clearOverride() {
         introStart = null
         introEnd = null
         outroLength = null
+    }
+
+    fun resetProgress() {
+        position = 0L
+        watched = false
     }
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -27,6 +40,9 @@ data class Episode(
         introStart?.let { put("introStart", it) }
         introEnd?.let { put("introEnd", it) }
         outroLength?.let { put("outroLength", it) }
+        put("position", position)
+        put("duration", duration)
+        put("watched", watched)
     }
 
     companion object {
@@ -36,6 +52,9 @@ data class Episode(
             introStart = if (o.has("introStart")) o.getInt("introStart") else null,
             introEnd = if (o.has("introEnd")) o.getInt("introEnd") else null,
             outroLength = if (o.has("outroLength")) o.getInt("outroLength") else null,
+            position = o.optLong("position", 0L),
+            duration = o.optLong("duration", 0L),
+            watched = o.optBoolean("watched", false),
         )
     }
 }
@@ -52,23 +71,37 @@ class Series(
     var skipIntro: Boolean = true,
     var skipOutro: Boolean = true,
     var lastIndex: Int = 0,
-    var lastPosition: Long = 0L,
+    var lastWatchedAt: Long = 0L,
 ) {
     fun introStartOf(ep: Episode) = ep.introStart ?: introStart
     fun introEndOf(ep: Episode) = ep.introEnd ?: introEnd
     fun outroOf(ep: Episode) = ep.outroLength ?: outroLength
+
+    val watchedCount: Int get() = episodes.count { it.watched }
+
+    /**
+     * The clip "continue watching" should open: the last one played if unfinished,
+     * otherwise the next unfinished one. Null when every clip has been watched.
+     */
+    fun resumeIndex(): Int? {
+        if (episodes.isEmpty()) return null
+        val last = lastIndex.coerceIn(0, episodes.size - 1)
+        if (!episodes[last].watched) return last
+        val order = (last + 1 until episodes.size) + (0 until last)
+        return order.firstOrNull { !episodes[it].watched }
+    }
+
+    fun resetProgress() {
+        episodes.forEach { it.resetProgress() }
+        lastIndex = 0
+    }
 
     /** Edits the episode list while keeping "continue watching" on the same file. */
     fun editEpisodes(block: (MutableList<Episode>) -> Unit) {
         val current = episodes.getOrNull(lastIndex)?.uri
         block(episodes)
         val idx = episodes.indexOfFirst { it.uri == current }
-        if (idx >= 0) {
-            lastIndex = idx
-        } else {
-            lastIndex = 0
-            lastPosition = 0
-        }
+        lastIndex = idx.coerceAtLeast(0)
     }
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -81,7 +114,7 @@ class Series(
         put("skipIntro", skipIntro)
         put("skipOutro", skipOutro)
         put("lastIndex", lastIndex)
-        put("lastPosition", lastPosition)
+        put("lastWatchedAt", lastWatchedAt)
         put("episodes", JSONArray().apply { episodes.forEach { put(it.toJson()) } })
     }
 
@@ -89,6 +122,10 @@ class Series(
         fun fromJson(o: JSONObject): Series {
             val arr = o.optJSONArray("episodes") ?: JSONArray()
             val eps = MutableList(arr.length()) { Episode.fromJson(arr.getJSONObject(it), "ตอนที่ ${it + 1}") }
+            val lastIndex = o.optInt("lastIndex", 0)
+            // Older versions kept a single position per series; move it onto that clip.
+            val legacyPosition = o.optLong("lastPosition", 0L)
+            if (legacyPosition > 0 && eps.none { it.position > 0 }) eps.getOrNull(lastIndex)?.position = legacyPosition
             return Series(
                 id = o.getString("id"),
                 name = o.optString("name", "ไม่มีชื่อ"),
@@ -99,8 +136,8 @@ class Series(
                 outroLength = o.optInt("outroLength", 0),
                 skipIntro = o.optBoolean("skipIntro", true),
                 skipOutro = o.optBoolean("skipOutro", true),
-                lastIndex = o.optInt("lastIndex", 0),
-                lastPosition = o.optLong("lastPosition", 0L),
+                lastIndex = lastIndex,
+                lastWatchedAt = o.optLong("lastWatchedAt", 0L),
             )
         }
     }
@@ -136,6 +173,14 @@ object Store {
         val idx = list.indexOfFirst { it.id == series.id }
         if (idx >= 0) list[idx] = series else list.add(series)
         saveAll(ctx, list)
+    }
+
+    /** The series played most recently, if any has been played. */
+    fun latest(ctx: Context): Series? =
+        loadAll(ctx).filter { it.lastWatchedAt > 0 && it.episodes.isNotEmpty() }.maxByOrNull { it.lastWatchedAt }
+
+    fun resetAllProgress(ctx: Context) {
+        saveAll(ctx, loadAll(ctx).onEach { it.resetProgress() })
     }
 
     fun delete(ctx: Context, id: String) {
@@ -202,6 +247,17 @@ object TimeText {
     }
 
     fun format(seconds: Int): String = format(seconds.toLong())
+
+    fun ms(millis: Long): String = format(millis.coerceAtLeast(0L) / 1000)
+
+    /** "12:34 / 45:00 (27%)" style progress for a clip. */
+    fun progress(ep: Episode): String {
+        if (ep.watched) return "✓ ดูจบแล้ว"
+        if (ep.position < 5_000) return "ยังไม่ได้ดู"
+        if (ep.duration <= 0) return "⏸ ค้างที่ ${ms(ep.position)}"
+        val pct = (ep.position * 100 / ep.duration).coerceIn(0, 100)
+        return "⏸ ค้างที่ ${ms(ep.position)} / ${ms(ep.duration)} ($pct%)"
+    }
 
     /** Parses "90", "1:30" or "1:02:03" into seconds; blank means 0, invalid means null. */
     fun parse(text: String): Int? {

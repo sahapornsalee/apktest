@@ -192,3 +192,37 @@ object Dialogs {
         builder.show()
     }
 }
+
+object Resume {
+    /** Button text for continuing a series, e.g. "▶ ดูต่อ ตอนที่ 3 · 12:34". */
+    fun label(s: Series): String {
+        val idx = s.resumeIndex() ?: return "✓ ดูครบแล้ว · เริ่มดูใหม่"
+        val ep = s.episodes[idx]
+        if (s.watchedCount == 0 && idx == 0 && !ep.hasProgress) return "▶ เริ่มดูตั้งแต่ตอนแรก"
+        return "▶ ดูต่อ ตอนที่ ${idx + 1} · ${TimeText.ms(ep.resumePosition)}"
+    }
+
+    /** Opens the clip left unfinished at its saved second; offers a fresh start once all are watched. */
+    fun play(act: Activity, s: Series) {
+        if (s.episodes.isEmpty()) return
+        val idx = s.resumeIndex()
+        if (idx == null) {
+            Dialogs.confirm(act, "ดู “${s.name}” ครบทุกตอนแล้ว\nเริ่มดูใหม่ตั้งแต่ตอนแรก?", "เริ่มใหม่") {
+                s.resetProgress()
+                Store.put(act, s)
+                PlayerActivity.start(act, s.id, 0, 0L)
+            }
+        } else {
+            PlayerActivity.start(act, s.id, idx, s.episodes[idx].resumePosition)
+        }
+    }
+
+    fun confirmReset(act: Activity, s: Series, onDone: () -> Unit) {
+        Dialogs.confirm(act, "ล้างการจดจำการดูของ “${s.name}” ทุกตอน แล้วเริ่มดูใหม่ตั้งแต่ตอนแรก?", "รีเซ็ต") {
+            s.resetProgress()
+            Store.put(act, s)
+            act.toast("รีเซ็ตแล้ว")
+            onDone()
+        }
+    }
+}

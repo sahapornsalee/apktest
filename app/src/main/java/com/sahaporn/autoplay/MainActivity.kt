@@ -16,6 +16,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var listView: ListView
     private lateinit var txtEmpty: TextView
     private lateinit var adapter: RowAdapter
+    private lateinit var btnLatest: Button
     private val collapsed = mutableSetOf<String>()
 
     /** Category for the series being added; null means ask after naming it. */
@@ -44,6 +45,7 @@ class MainActivity : AppCompatActivity() {
         setupBars(findViewById(R.id.root), toolbar)
 
         listView = findViewById(R.id.list)
+        btnLatest = findViewById(R.id.btnLatest)
         txtEmpty = findViewById(R.id.txtEmpty)
         adapter = RowAdapter(this)
         listView.adapter = adapter
@@ -59,6 +61,7 @@ class MainActivity : AppCompatActivity() {
         menu.add(0, MENU_ADD_CATEGORY, 0, "+ หมวดหมู่").setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
         menu.add(0, MENU_EXPAND, 1, "ขยายทุกหมวด")
         menu.add(0, MENU_COLLAPSE, 2, "ยุบทุกหมวด")
+        menu.add(0, MENU_RESET_ALL, 3, "รีเซ็ตการดูทุกเรื่อง")
         return true
     }
 
@@ -70,6 +73,11 @@ class MainActivity : AppCompatActivity() {
             }
             MENU_EXPAND -> {
                 collapsed.clear()
+                refresh()
+            }
+            MENU_RESET_ALL -> Dialogs.confirm(this, "ล้างการจดจำการดูของทุกเรื่อง ทุกตอน?", "รีเซ็ตทั้งหมด") {
+                Store.resetAllProgress(this)
+                toast("รีเซ็ตทั้งหมดแล้ว")
                 refresh()
             }
             MENU_COLLAPSE -> {
@@ -111,6 +119,13 @@ class MainActivity : AppCompatActivity() {
             if (loose.isNotEmpty()) addGroup("", "ไม่มีหมวดหมู่", loose)
         }
 
+        val latest = Store.latest(this)
+        btnLatest.visibility = if (latest == null) View.GONE else View.VISIBLE
+        if (latest != null) {
+            btnLatest.text = "${Resume.label(latest)}\n${latest.name}"
+            btnLatest.setOnClickListener { Resume.play(this, latest) }
+        }
+
         val empty = rows.isEmpty()
         txtEmpty.visibility = if (empty) View.VISIBLE else View.GONE
         listView.visibility = if (empty) View.GONE else View.VISIBLE
@@ -118,10 +133,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun seriesRow(s: Series): Row {
-        val at = (s.lastIndex + 1).coerceAtMost(s.episodes.size)
+        val idx = s.resumeIndex()
+        val status = when {
+            idx == null -> "✓ ดูครบแล้ว"
+            s.watchedCount == 0 && !s.episodes[idx].hasProgress -> "ยังไม่ได้ดู"
+            else -> "ค้างตอนที่ ${idx + 1} · ${TimeText.ms(s.episodes[idx].resumePosition)}"
+        }
         return Row(
             title = s.name,
-            subtitle = "${s.episodes.size} ตอน · ดูถึงตอนที่ $at",
+            subtitle = "${s.episodes.size} ตอน · ดูจบ ${s.watchedCount} · $status",
             onMore = { seriesMenu(s) },
         ) { openSeries(s.id) }
     }
@@ -129,9 +149,8 @@ class MainActivity : AppCompatActivity() {
     private fun seriesMenu(s: Series) {
         Dialogs.menu(
             this, s.name, listOf(
-                "▶ ดูต่อ" to {
-                    if (s.episodes.isNotEmpty()) PlayerActivity.start(this, s.id, s.lastIndex, s.lastPosition)
-                },
+                Resume.label(s) to { Resume.play(this, s) },
+                "↺ รีเซ็ตการดูเรื่องนี้" to { Resume.confirmReset(this, s) { refresh() } },
                 "แก้ไขตอน / ตั้งค่า" to { openSeries(s.id) },
                 "เปลี่ยนชื่อ" to {
                     Dialogs.askText(this, "เปลี่ยนชื่อเรื่อง", s.name) { name ->
@@ -230,5 +249,6 @@ class MainActivity : AppCompatActivity() {
         private const val MENU_ADD_CATEGORY = 1
         private const val MENU_EXPAND = 2
         private const val MENU_COLLAPSE = 3
+        private const val MENU_RESET_ALL = 4
     }
 }

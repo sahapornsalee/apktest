@@ -21,11 +21,26 @@
             android:paddingBottom="8dp"
             android:textSize="14sp" />
 
-        <Button
-            android:id="@+id/btnResume"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="▶ เล่น" />
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnResume"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:text="▶ เล่น" />
+
+            <Button
+                android:id="@+id/btnResetAll"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="↺ รีเซ็ต" />
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"

@@ -56,7 +56,8 @@ class SeriesActivity : AppCompatActivity() {
         adapter = RowAdapter(this)
         findViewById<ListView>(R.id.list).adapter = adapter
 
-        btnResume.setOnClickListener { play(series.lastIndex, series.lastPosition) }
+        btnResume.setOnClickListener { Resume.play(this, series) }
+        findViewById<Button>(R.id.btnResetAll).setOnClickListener { Resume.confirmReset(this, series) { render() } }
         findViewById<Button>(R.id.btnSkip).setOnClickListener { showSkipDialog() }
         findViewById<Button>(R.id.btnAdd).setOnClickListener { showAddDialog() }
     }
@@ -78,7 +79,7 @@ class SeriesActivity : AppCompatActivity() {
         menu.add(0, MENU_RENAME, 2, "เปลี่ยนชื่อเรื่อง")
         menu.add(0, MENU_CATEGORY, 3, "ย้ายหมวดหมู่")
         menu.add(0, MENU_SORT, 4, "เรียงตอนตามชื่อไฟล์")
-        menu.add(0, MENU_RESET, 5, "เริ่มดูใหม่ตั้งแต่ตอนแรก")
+        menu.add(0, MENU_RESET, 5, "รีเซ็ตการดูทั้งเรื่อง")
         menu.add(0, MENU_DELETE, 6, "ลบเรื่องนี้")
         return true
     }
@@ -103,11 +104,7 @@ class SeriesActivity : AppCompatActivity() {
                 }
                 save()
             }
-            MENU_RESET -> {
-                series.lastIndex = 0
-                series.lastPosition = 0
-                save()
-            }
+            MENU_RESET -> Resume.confirmReset(this, series) { render() }
             MENU_DELETE -> Dialogs.confirm(this, "ลบ “${series.name}” ออกจากรายการ?\n(ไฟล์วิดีโอในเครื่องจะไม่ถูกลบ)", "ลบ") {
                 Store.delete(this, series.id)
                 finish()
@@ -139,29 +136,23 @@ class SeriesActivity : AppCompatActivity() {
             "ปิดการข้ามเพลงปิด"
         }
         val cat = series.category.ifEmpty { "ไม่มีหมวดหมู่" }
-        txtInfo.text = "📁 $cat · ${series.episodes.size} ตอน · เล่นต่อกันอัตโนมัติ\n$intro\n$outro"
+        txtInfo.text = "📁 $cat · ${series.episodes.size} ตอน · ดูจบแล้ว ${series.watchedCount} ตอน\n$intro\n$outro"
 
-        if (series.lastIndex >= series.episodes.size) {
-            series.lastIndex = 0
-            series.lastPosition = 0
-        }
+        if (series.lastIndex >= series.episodes.size) series.lastIndex = 0
         btnResume.isEnabled = series.episodes.isNotEmpty()
-        btnResume.text = if (series.lastIndex == 0 && series.lastPosition < 1000) {
-            "▶ เริ่มดูตั้งแต่ตอนแรก"
-        } else {
-            "▶ ดูต่อ ตอนที่ ${series.lastIndex + 1} (${TimeText.format(series.lastPosition / 1000)})"
-        }
+        btnResume.text = Resume.label(series)
 
         adapter.rows = series.episodes.mapIndexed { i, e ->
             val notes = mutableListOf<String>()
-            if (i == series.lastIndex) notes.add("▶ ดูถึงตอนนี้")
+            if (i == series.lastIndex && series.lastWatchedAt > 0) notes.add("👁 ดูล่าสุด")
+            notes.add(TimeText.progress(e))
             if (e.hasOverride) notes.add("⚙ ตั้งเวลาข้ามเฉพาะตอนนี้")
             Row(
                 title = "${i + 1}. ${e.name}",
                 subtitle = notes.joinToString(" · "),
                 highlight = i == series.lastIndex,
                 onMore = { episodeMenu(i) },
-            ) { play(i, 0L) }
+            ) { playEpisode(i) }
         }
     }
 
@@ -170,11 +161,55 @@ class SeriesActivity : AppCompatActivity() {
         PlayerActivity.start(this, series.id, index, position)
     }
 
-    private fun episodeMenu(index: Int) {
+    /** Tapping a clip resumes its own saved spot, or asks when there is one. */
+    private fun playEpisode(index: Int) {
         val ep = series.episodes[index]
+        if (ep.watched || ep.position < 5_000) {
+            play(index, 0L)
+            return
+        }
         Dialogs.menu(
             this, "${index + 1}. ${ep.name}", listOf(
-                "▶ เล่นจากตอนนี้" to { play(index, 0L) },
+                "▶ ดูต่อจาก ${TimeText.ms(ep.position)}" to { play(index, ep.position) },
+                "⏮ เริ่มตั้งแต่ต้นตอน" to { startOver(index) },
+            )
+        )
+    }
+
+    private fun startOver(index: Int) {
+        series.episodes[index].resetProgress()
+        Store.put(this, series)
+        play(index, 0L)
+    }
+
+    private fun episodeMenu(index: Int) {
+        val ep = series.episodes[index]
+        val items = mutableListOf<Pair<String, () -> Unit>>()
+        if (!ep.watched && ep.position >= 5_000) {
+            items.add("▶ ดูต่อจาก ${TimeText.ms(ep.position)}" to { play(index, ep.position) })
+        }
+        items.add("⏮ เล่นตั้งแต่ต้นตอน" to { startOver(index) })
+        items.add("↺ รีเซ็ตการดูตอนนี้" to {
+            ep.resetProgress()
+            save()
+            toast("รีเซ็ตตอนนี้แล้ว")
+        })
+        items.add(
+            if (ep.watched) {
+                "ทำเครื่องหมายว่ายังไม่ได้ดู" to {
+                    ep.watched = false
+                    save()
+                }
+            } else {
+                "✓ ทำเครื่องหมายว่าดูแล้ว" to {
+                    ep.watched = true
+                    ep.position = 0L
+                    save()
+                }
+            }
+        )
+        Dialogs.menu(
+            this, "${index + 1}. ${ep.name}", items + listOf(
                 "เปลี่ยนชื่อตอน" to {
                     Dialogs.askText(this, "เปลี่ยนชื่อตอน", ep.name) { name ->
                         ep.name = name

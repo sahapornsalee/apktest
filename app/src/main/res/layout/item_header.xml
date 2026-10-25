@@ -19,7 +19,7 @@
             android:id="@+id/txtTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textColor="@color/primary"
+            android:textColor="?attr/colorPrimary"
             android:textSize="15sp"
             android:textStyle="bold" />
 
@@ -37,6 +37,6 @@
         android:background="?attr/selectableItemBackgroundBorderless"
         android:gravity="center"
         android:text="⋮"
-        android:textColor="@color/primary"
+        android:textColor="?attr/colorPrimary"
         android:textSize="22sp" />
 </LinearLayout>

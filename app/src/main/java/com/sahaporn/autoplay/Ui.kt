@@ -108,7 +108,7 @@ class SkipValues(
 )
 
 object Dialogs {
-    fun menu(act: Activity, title: String, items: List<Pair<String, () -> Unit>>) {
+    fun menu(act: Activity, title: String, items: List<Pair<CharSequence, () -> Unit>>) {
         AlertDialog.Builder(act)
             .setTitle(title)
             .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }

@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Accent colours the user can pick; applied on top of the activity theme. -->
+    <style name="Accent.Red" parent="">
+        <item name="colorPrimary">#E53935</item>
+        <item name="colorPrimaryVariant">#B71C1C</item>
+        <item name="colorSecondary">#E53935</item>
+        <item name="colorSecondaryVariant">#B71C1C</item>
+        <item name="colorAccent">#E53935</item>
+    </style>
+    <style name="Accent.Pink" parent="">
+        <item name="colorPrimary">#D81B60</item>
+        <item name="colorPrimaryVariant">#880E4F</item>
+        <item name="colorSecondary">#D81B60</item>
+        <item name="colorSecondaryVariant">#880E4F</item>
+        <item name="colorAccent">#D81B60</item>
+    </style>
+    <style name="Accent.Purple" parent="">
+        <item name="colorPrimary">#8E24AA</item>
+        <item name="colorPrimaryVariant">#4A148C</item>
+        <item name="colorSecondary">#8E24AA</item>
+        <item name="colorSecondaryVariant">#4A148C</item>
+        <item name="colorAccent">#8E24AA</item>
+    </style>
+    <style name="Accent.Indigo" parent="">
+        <item name="colorPrimary">#3949AB</item>
+        <item name="colorPrimaryVariant">#1A237E</item>
+        <item name="colorSecondary">#3949AB</item>
+        <item name="colorSecondaryVariant">#1A237E</item>
+        <item name="colorAccent">#3949AB</item>
+    </style>
+    <style name="Accent.Blue" parent="">
+        <item name="colorPrimary">#1E88E5</item>
+        <item name="colorPrimaryVariant">#0D47A1</item>
+        <item name="colorSecondary">#1E88E5</item>
+        <item name="colorSecondaryVariant">#0D47A1</item>
+        <item name="colorAccent">#1E88E5</item>
+    </style>
+    <style name="Accent.Teal" parent="">
+        <item name="colorPrimary">#00897B</item>
+        <item name="colorPrimaryVariant">#004D40</item>
+        <item name="colorSecondary">#00897B</item>
+        <item name="colorSecondaryVariant">#004D40</item>
+        <item name="colorAccent">#00897B</item>
+    </style>
+    <style name="Accent.Green" parent="">
+        <item name="colorPrimary">#43A047</item>
+        <item name="colorPrimaryVariant">#1B5E20</item>
+        <item name="colorSecondary">#43A047</item>
+        <item name="colorSecondaryVariant">#1B5E20</item>
+        <item name="colorAccent">#43A047</item>
+    </style>
+    <style name="Accent.Orange" parent="">
+        <item name="colorPrimary">#F4511E</item>
+        <item name="colorPrimaryVariant">#BF360C</item>
+        <item name="colorSecondary">#F4511E</item>
+        <item name="colorSecondaryVariant">#BF360C</item>
+        <item name="colorAccent">#F4511E</item>
+    </style>
+    <style name="Accent.Amber" parent="">
+        <item name="colorPrimary">#FFA000</item>
+        <item name="colorPrimaryVariant">#FF6F00</item>
+        <item name="colorSecondary">#FFA000</item>
+        <item name="colorSecondaryVariant">#FF6F00</item>
+        <item name="colorAccent">#FFA000</item>
+    </style>
+    <style name="Accent.Brown" parent="">
+        <item name="colorPrimary">#6D4C41</item>
+        <item name="colorPrimaryVariant">#3E2723</item>
+        <item name="colorSecondary">#6D4C41</item>
+        <item name="colorSecondaryVariant">#3E2723</item>
+        <item name="colorAccent">#6D4C41</item>
+    </style>
+    <style name="Accent.Gray" parent="">
+        <item name="colorPrimary">#546E7A</item>
+        <item name="colorPrimaryVariant">#263238</item>
+        <item name="colorSecondary">#546E7A</item>
+        <item name="colorSecondaryVariant">#263238</item>
+        <item name="colorAccent">#546E7A</item>
+    </style>
+
+    <!-- True black backgrounds for OLED screens. -->
+    <style name="ThemeOverlay.AutoPlay.Black" parent="">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorBackground">@android:color/black</item>
+        <item name="colorSurface">@android:color/black</item>
+    </style>
+</resources>

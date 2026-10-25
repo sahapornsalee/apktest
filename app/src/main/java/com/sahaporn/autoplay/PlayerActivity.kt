@@ -25,7 +25,6 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -48,7 +47,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import kotlin.math.abs
 
 @OptIn(UnstableApi::class)
-class PlayerActivity : AppCompatActivity() {
+class PlayerActivity : ThemedActivity() {
     companion object {
         const val EXTRA_ID = "series_id"
         const val EXTRA_INDEX = "index"

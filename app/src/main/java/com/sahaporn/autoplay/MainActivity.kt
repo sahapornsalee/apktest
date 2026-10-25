@@ -9,17 +9,16 @@ import android.widget.Button
 import android.widget.ListView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SearchView
 import com.google.android.material.appbar.MaterialToolbar
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ThemedActivity() {
     private lateinit var listView: ListView
     private lateinit var txtEmpty: TextView
     private lateinit var adapter: RowAdapter
     private lateinit var btnLatest: Button
     private val collapsed = mutableSetOf<String>()
-    private var query = ""
+    private var searchText = ""
     private var emptyText: CharSequence = ""
 
     /** Category for the series being added; null means ask after naming it. */
@@ -68,7 +67,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onQueryTextSubmit(text: String?): Boolean = false
 
                 override fun onQueryTextChange(text: String?): Boolean {
-                    query = text.orEmpty().trim()
+                    searchText = text.orEmpty().trim()
                     refresh()
                     return true
                 }
@@ -82,7 +81,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onMenuItemActionExpand(item: MenuItem): Boolean = true
 
                 override fun onMenuItemActionCollapse(item: MenuItem): Boolean {
-                    query = ""
+                    searchText = ""
                     refresh()
                     return true
                 }
@@ -91,7 +90,8 @@ class MainActivity : AppCompatActivity() {
         menu.add(0, MENU_ADD_CATEGORY, 1, "+ หมวดหมู่").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
         menu.add(0, MENU_EXPAND, 1, "ขยายทุกหมวด")
         menu.add(0, MENU_COLLAPSE, 2, "ยุบทุกหมวด")
-        menu.add(0, MENU_RESET_ALL, 3, "รีเซ็ตการดูทุกเรื่อง")
+        menu.add(0, MENU_THEME, 3, "🎨 ธีมและสี")
+        menu.add(0, MENU_RESET_ALL, 4, "รีเซ็ตการดูทุกเรื่อง")
         return true
     }
 
@@ -105,6 +105,7 @@ class MainActivity : AppCompatActivity() {
                 collapsed.clear()
                 refresh()
             }
+            MENU_THEME -> AppTheme.showPicker(this)
             MENU_RESET_ALL -> Dialogs.confirm(this, "ล้างการจดจำการดูของทุกเรื่อง ทุกตอน?", "รีเซ็ตทั้งหมด") {
                 Store.resetAllProgress(this)
                 toast("รีเซ็ตทั้งหมดแล้ว")
@@ -143,7 +144,7 @@ class MainActivity : AppCompatActivity() {
 
         val pinned = all.filter { it.pinned }
         val rest = all.filter { !it.pinned }
-        if (query.isNotEmpty()) {
+        if (searchText.isNotEmpty()) {
             all.filter { matches(it) }.forEach { rows.add(seriesRow(it)) }
         } else {
             if (pinned.isNotEmpty()) addGroup(PINNED_KEY, "📌 ปักหมุด", pinned)
@@ -162,23 +163,23 @@ class MainActivity : AppCompatActivity() {
 
         val latest = Store.latest(this)
         btnLatest.visibility = if (latest == null) View.GONE else View.VISIBLE
-        if (query.isNotEmpty()) btnLatest.visibility = View.GONE
+        if (searchText.isNotEmpty()) btnLatest.visibility = View.GONE
         if (latest != null) {
             btnLatest.text = "${Resume.label(latest)}\n${latest.name}"
             btnLatest.setOnClickListener { Resume.play(this, latest) }
         }
 
         val empty = rows.isEmpty()
-        txtEmpty.text = if (query.isNotEmpty()) "ไม่พบ “$query”" else emptyText
+        txtEmpty.text = if (searchText.isNotEmpty()) "ไม่พบ “$searchText”" else emptyText
         txtEmpty.visibility = if (empty) View.VISIBLE else View.GONE
         listView.visibility = if (empty) View.GONE else View.VISIBLE
         adapter.rows = rows
     }
 
     private fun matches(s: Series): Boolean =
-        s.name.contains(query, ignoreCase = true) ||
-            s.category.contains(query, ignoreCase = true) ||
-            s.episodes.any { it.name.contains(query, ignoreCase = true) }
+        s.name.contains(searchText, ignoreCase = true) ||
+            s.category.contains(searchText, ignoreCase = true) ||
+            s.episodes.any { it.name.contains(searchText, ignoreCase = true) }
 
     private fun seriesRow(s: Series): Row {
         val idx = s.resumeIndex()
@@ -187,8 +188,8 @@ class MainActivity : AppCompatActivity() {
             s.watchedCount == 0 && !s.episodes[idx].hasProgress -> "ยังไม่ได้ดู"
             else -> "ค้างตอนที่ ${idx + 1} · ${TimeText.ms(s.episodes[idx].resumePosition)}"
         }
-        val found = if (query.isNotEmpty() && !s.name.contains(query, ignoreCase = true)) {
-            s.episodes.firstOrNull { it.name.contains(query, ignoreCase = true) }?.let { "\n🔍 พบในตอน: ${it.name}" }
+        val found = if (searchText.isNotEmpty() && !s.name.contains(searchText, ignoreCase = true)) {
+            s.episodes.firstOrNull { it.name.contains(searchText, ignoreCase = true) }?.let { "\n🔍 พบในตอน: ${it.name}" }
         } else {
             null
         }
@@ -312,6 +313,7 @@ class MainActivity : AppCompatActivity() {
         private const val MENU_COLLAPSE = 3
         private const val MENU_RESET_ALL = 4
         private const val MENU_SEARCH = 5
+        private const val MENU_THEME = 6
         private const val PINNED_KEY = "\u0000pinned"
     }
 }

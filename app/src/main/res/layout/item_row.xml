@@ -50,7 +50,7 @@
             android:layout_marginTop="4dp"
             android:max="100"
             android:progressBackgroundTint="#55808080"
-            android:progressTint="@color/primary"
+            android:progressTint="?attr/colorPrimary"
             android:visibility="gone" />
     </LinearLayout>
 

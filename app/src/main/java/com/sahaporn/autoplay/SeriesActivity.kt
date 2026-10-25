@@ -7,11 +7,10 @@ import android.widget.Button
 import android.widget.ListView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import com.google.android.material.appbar.MaterialToolbar
 
-class SeriesActivity : AppCompatActivity() {
+class SeriesActivity : ThemedActivity() {
     companion object {
         const val EXTRA_ID = "series_id"
         private const val MENU_ADD = 1
@@ -21,6 +20,7 @@ class SeriesActivity : AppCompatActivity() {
         private const val MENU_SORT = 5
         private const val MENU_RESET = 6
         private const val MENU_DELETE = 7
+        private const val MENU_THEME = 8
     }
 
     private lateinit var seriesId: String
@@ -85,13 +85,15 @@ class SeriesActivity : AppCompatActivity() {
         menu.add(0, MENU_CATEGORY, 3, "ย้ายหมวดหมู่")
         menu.add(0, MENU_SORT, 4, "เรียงตอนตามชื่อไฟล์")
         menu.add(0, MENU_RESET, 5, "รีเซ็ตการดูทั้งเรื่อง")
-        menu.add(0, MENU_DELETE, 6, "ลบเรื่องนี้")
+        menu.add(0, MENU_THEME, 6, "🎨 ธีมและสี")
+        menu.add(0, MENU_DELETE, 7, "ลบเรื่องนี้")
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             MENU_ADD -> showAddDialog()
+            MENU_THEME -> AppTheme.showPicker(this)
             MENU_SKIP -> showSkipDialog()
             MENU_RENAME -> Dialogs.askText(this, "เปลี่ยนชื่อเรื่อง", series.name) { name ->
                 series.name = name

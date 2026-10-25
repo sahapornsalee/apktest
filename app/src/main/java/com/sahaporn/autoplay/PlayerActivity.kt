@@ -233,17 +233,10 @@ class PlayerActivity : ThemedActivity() {
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            if (series.engine != Engines.MAIN) {
-                showToast("ตัวเล่นหลักเปิดไฟล์นี้ไม่ได้ · สลับไปตัวเล่นสำรอง VLC")
-                switchToVlc(remember = false, software = false)
-                return
-            }
-            showToast("เล่นไฟล์นี้ไม่ได้ (${error.errorCodeName})")
-            if (player.hasNextMediaItem()) {
-                player.seekToNextMediaItem()
-                player.prepare()
-                player.play()
-            }
+            // Whatever player the series is set to, a clip the main player can't read
+            // (e.g. a file whose name says .mp4 but holds another format) goes to VLC.
+            showToast("ตัวเล่นหลักเปิดไฟล์นี้ไม่ได้ · กำลังเปิดด้วยตัวเล่นสำรอง VLC")
+            switchToVlc(remember = false, software = false)
         }
     }
 

@@ -2,24 +2,27 @@ package com.sahaporn.autoplay
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
-import android.widget.ListView
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.SearchView
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 
+/** Home screen: a "continue watching" hero, then Netflix-style rows per category. */
 class MainActivity : ThemedActivity() {
-    private lateinit var listView: ListView
-    private lateinit var txtEmpty: TextView
-    private lateinit var adapter: RowAdapter
-    private lateinit var btnLatest: Button
-    private val collapsed = mutableSetOf<String>()
+    private lateinit var content: LinearLayout
     private var searchText = ""
-    private var emptyText: CharSequence = ""
 
     /** Category for the series being added; null means ask after naming it. */
     private var pendingCategory: String? = null
@@ -45,14 +48,8 @@ class MainActivity : ThemedActivity() {
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
         setupBars(findViewById(R.id.root), toolbar)
-
-        listView = findViewById(R.id.list)
-        btnLatest = findViewById(R.id.btnLatest)
-        txtEmpty = findViewById(R.id.txtEmpty)
-        emptyText = txtEmpty.text
-        adapter = RowAdapter(this)
-        listView.adapter = adapter
-        findViewById<Button>(R.id.btnAdd).setOnClickListener { showAddDialog(null) }
+        content = findViewById(R.id.content)
+        findViewById<View>(R.id.btnAdd).setOnClickListener { showAddDialog(null) }
     }
 
     override fun onResume() {
@@ -87,11 +84,9 @@ class MainActivity : ThemedActivity() {
                 }
             })
         }
-        menu.add(0, MENU_ADD_CATEGORY, 1, "+ หมวดหมู่").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
-        menu.add(0, MENU_EXPAND, 1, "ขยายทุกหมวด")
-        menu.add(0, MENU_COLLAPSE, 2, "ยุบทุกหมวด")
-        menu.add(0, MENU_THEME, 3, "🎨 ธีมและสี")
-        menu.add(0, MENU_RESET_ALL, 4, "รีเซ็ตการดูทุกเรื่อง")
+        menu.add(0, MENU_ADD_CATEGORY, 1, "+ หมวดหมู่")
+        menu.add(0, MENU_THEME, 2, "🎨 ธีมและสี")
+        menu.add(0, MENU_RESET_ALL, 3, "รีเซ็ตการดูทุกเรื่อง")
         return true
     }
 
@@ -101,19 +96,10 @@ class MainActivity : ThemedActivity() {
                 if (!Store.addCategory(this, name)) toast("มีหมวดหมู่นี้แล้ว")
                 refresh()
             }
-            MENU_EXPAND -> {
-                collapsed.clear()
-                refresh()
-            }
             MENU_THEME -> AppTheme.showPicker(this)
             MENU_RESET_ALL -> Dialogs.confirm(this, "ล้างการจดจำการดูของทุกเรื่อง ทุกตอน?", "รีเซ็ตทั้งหมด") {
                 Store.resetAllProgress(this)
                 toast("รีเซ็ตทั้งหมดแล้ว")
-                refresh()
-            }
-            MENU_COLLAPSE -> {
-                collapsed.addAll(Store.categories(this))
-                collapsed.add("")
                 refresh()
             }
             else -> return super.onOptionsItemSelected(item)
@@ -122,58 +108,33 @@ class MainActivity : ThemedActivity() {
     }
 
     private fun refresh() {
+        content.removeAllViews()
         val all = Store.loadAll(this)
         val cats = Store.categories(this)
-        val rows = mutableListOf<Row>()
 
-        fun addGroup(cat: String, label: String, items: List<Series>) {
-            val closed = cat in collapsed
-            rows.add(
-                Row(
-                    title = "${if (closed) "▸" else "▾"} $label",
-                    subtitle = if (items.isEmpty()) "ว่าง — กด ⋮ เพื่อเพิ่มเรื่องในหมวดนี้" else "${items.size} เรื่อง",
-                    header = true,
-                    onMore = if (cat.isEmpty() || cat == PINNED_KEY) null else ({ categoryMenu(cat) }),
-                ) {
-                    if (!collapsed.remove(cat)) collapsed.add(cat)
-                    refresh()
-                }
-            )
-            if (!closed) items.forEach { rows.add(seriesRow(it)) }
-        }
-
-        val pinned = all.filter { it.pinned }
-        val rest = all.filter { !it.pinned }
         if (searchText.isNotEmpty()) {
-            all.filter { matches(it) }.forEach { rows.add(seriesRow(it)) }
-        } else {
-            if (pinned.isNotEmpty()) addGroup(PINNED_KEY, "📌 ปักหมุด", pinned)
-            if (cats.isEmpty()) {
-                if (pinned.isEmpty()) {
-                    rest.forEach { rows.add(seriesRow(it)) }
-                } else if (rest.isNotEmpty()) {
-                    addGroup("", "เรื่องอื่นๆ", rest)
-                }
-            } else {
-                cats.forEach { c -> addGroup(c, c, rest.filter { it.category == c }) }
-                val loose = rest.filter { it.category !in cats }
-                if (loose.isNotEmpty()) addGroup("", "ไม่มีหมวดหมู่", loose)
-            }
+            val found = all.filter { matches(it) }
+            if (found.isEmpty()) addMessage("ไม่พบ “$searchText”") else addSection("ผลการค้นหา", found, grid = true)
+            return
+        }
+        if (all.isEmpty() && cats.isEmpty()) {
+            addMessage(getString(R.string.empty_home))
+            return
         }
 
-        val latest = Store.latest(this)
-        btnLatest.visibility = if (latest == null) View.GONE else View.VISIBLE
-        if (searchText.isNotEmpty()) btnLatest.visibility = View.GONE
-        if (latest != null) {
-            btnLatest.text = "${Resume.label(latest)}\n${latest.name}"
-            btnLatest.setOnClickListener { Resume.play(this, latest) }
-        }
+        Store.latest(this)?.let { if (it.resumeIndex() != null) addHero(it) }
+        val watching = all.filter { inProgress(it) }.sortedByDescending { it.lastWatchedAt }
+        if (watching.isNotEmpty()) addSection("ดูต่อ", watching)
+        val pinned = all.filter { it.pinned }
+        if (pinned.isNotEmpty()) addSection("📌 ปักหมุด", pinned)
+        cats.forEach { c -> addSection(c, all.filter { it.category == c }, category = c) }
+        val loose = all.filter { it.category !in cats }
+        if (loose.isNotEmpty()) addSection(if (cats.isEmpty()) "เรื่องทั้งหมด" else "ไม่มีหมวดหมู่", loose)
+    }
 
-        val empty = rows.isEmpty()
-        txtEmpty.text = if (searchText.isNotEmpty()) "ไม่พบ “$searchText”" else emptyText
-        txtEmpty.visibility = if (empty) View.VISIBLE else View.GONE
-        listView.visibility = if (empty) View.GONE else View.VISIBLE
-        adapter.rows = rows
+    private fun inProgress(s: Series): Boolean {
+        val idx = s.resumeIndex() ?: return false
+        return s.watchedCount > 0 || s.episodes[idx].hasProgress
     }
 
     private fun matches(s: Series): Boolean =
@@ -181,39 +142,98 @@ class MainActivity : ThemedActivity() {
             s.category.contains(searchText, ignoreCase = true) ||
             s.episodes.any { it.name.contains(searchText, ignoreCase = true) }
 
-    private fun seriesRow(s: Series): Row {
-        val idx = s.resumeIndex()
-        val status = when {
-            idx == null -> "✓ ดูครบแล้ว"
-            s.watchedCount == 0 && !s.episodes[idx].hasProgress -> "ยังไม่ได้ดู"
-            else -> "ค้างตอนที่ ${idx + 1} · ${TimeText.ms(s.episodes[idx].resumePosition)}"
+    private fun addMessage(text: String) {
+        val pad = (32 * resources.displayMetrics.density).toInt()
+        content.addView(TextView(this).apply {
+            this.text = text
+            gravity = Gravity.CENTER
+            textSize = 16f
+            setPadding(pad, pad * 2, pad, pad)
+        })
+    }
+
+    private fun addHero(s: Series) {
+        val v = layoutInflater.inflate(R.layout.item_hero, content, false)
+        val idx = s.resumeIndex() ?: 0
+        val ep = s.episodes[idx]
+        Thumbs.load(this, ep.uri, v.findViewById(R.id.imgHero))
+        v.findViewById<TextView>(R.id.txtHeroTitle).text = s.name
+        v.findViewById<TextView>(R.id.txtHeroSub).text = "ตอนที่ ${idx + 1} · ${ep.shortName}\n${TimeText.progress(ep)}"
+        v.findViewById<ProgressBar>(R.id.heroProgress).showPercent(TimeText.percent(ep))
+        v.findViewById<Button>(R.id.btnHeroPlay).apply {
+            text = if (ep.hasProgress) "▶  ดูต่อ" else "▶  เล่น"
+            setOnClickListener { Resume.play(this@MainActivity, s) }
         }
-        val found = if (searchText.isNotEmpty() && !s.name.contains(searchText, ignoreCase = true)) {
-            s.episodes.firstOrNull { it.name.contains(searchText, ignoreCase = true) }?.let { "\n🔍 พบในตอน: ${it.name}" }
+        v.findViewById<Button>(R.id.btnHeroInfo).setOnClickListener { openSeries(s.id) }
+        v.setOnClickListener { openSeries(s.id) }
+        content.addView(v)
+    }
+
+    private fun addSection(title: String, items: List<Series>, category: String? = null, grid: Boolean = false) {
+        val v = layoutInflater.inflate(R.layout.item_section, content, false)
+        v.findViewById<TextView>(R.id.txtSection).text = title
+        val more = v.findViewById<View>(R.id.btnMore)
+        if (category != null) {
+            more.visibility = View.VISIBLE
+            more.setOnClickListener { categoryMenu(category) }
         } else {
-            null
+            more.visibility = View.GONE
         }
-        val cover = s.episodes.getOrNull(idx ?: 0)?.uri
-        return Row(
-            title = if (s.pinned) "📌 ${s.name}" else s.name,
-            thumb = cover,
-            progress = if (s.episodes.isEmpty()) -1 else s.watchedCount * 100 / s.episodes.size,
-            subtitle = "${s.episodes.size} ตอน · ดูจบ ${s.watchedCount} · $status${found ?: ""}",
-            onMore = { seriesMenu(s) },
-        ) { openSeries(s.id) }
+        if (items.isEmpty()) {
+            v.findViewById<TextView>(R.id.txtHint).apply {
+                visibility = View.VISIBLE
+                text = "ยังว่าง — กด ⋮ เพื่อเพิ่มเรื่องในหมวดนี้"
+            }
+        }
+        val rv = v.findViewById<RecyclerView>(R.id.rv)
+        rv.layoutManager = if (grid) {
+            GridLayoutManager(this, 2)
+        } else {
+            LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        }
+        rv.isNestedScrollingEnabled = false
+        rv.adapter = SimpleAdapter<Series>(R.layout.item_card) { card, s -> bindCard(card, s, grid) }.also { it.items = items }
+        content.addView(v)
+    }
+
+    private fun bindCard(v: View, s: Series, grid: Boolean) {
+        if (grid) v.layoutParams = v.layoutParams.apply { width = ViewGroup.LayoutParams.MATCH_PARENT }
+        val idx = s.resumeIndex()
+        val cover = s.episodes.getOrNull(idx ?: 0)
+        val img = v.findViewById<ImageView>(R.id.imgThumb)
+        if (cover != null) Thumbs.load(this, cover.uri, img) else img.setImageDrawable(null)
+        v.findViewById<TextView>(R.id.txtTitle).text = if (s.pinned) "📌 ${s.name}" else s.name
+        v.findViewById<ProgressBar>(R.id.progress).showPercent(cover?.let { TimeText.percent(it) } ?: -1)
+        v.findViewById<TextView>(R.id.txtSubtitle).text = status(s)
+        v.setOnClickListener { openSeries(s.id) }
+        v.setOnLongClickListener {
+            seriesMenu(s)
+            true
+        }
+    }
+
+    private fun status(s: Series): String {
+        val idx = s.resumeIndex()
+        val base = when {
+            idx == null -> "✓ ดูครบ ${s.episodes.size} ตอน"
+            s.watchedCount == 0 && !s.episodes[idx].hasProgress -> "${s.episodes.size} ตอน"
+            else -> "ตอนที่ ${idx + 1} · ${TimeText.ms(s.episodes[idx].resumePosition)}"
+        }
+        if (searchText.isEmpty() || s.name.contains(searchText, ignoreCase = true)) return base
+        val hit = s.episodes.firstOrNull { it.name.contains(searchText, ignoreCase = true) } ?: return base
+        return "🔍 ${hit.shortName}"
     }
 
     private fun seriesMenu(s: Series) {
         Dialogs.menu(
             this, s.name, listOf(
                 Resume.label(s) to { Resume.play(this, s) },
-                (if (s.pinned) "เลิกปักหมุด" else "📌 ปักหมุดไว้บนสุด") to {
+                "ⓘ รายละเอียด / แก้ไขตอน" to { openSeries(s.id) },
+                (if (s.pinned) "เลิกปักหมุด" else "📌 ปักหมุด") to {
                     s.pinned = !s.pinned
                     Store.put(this, s)
                     refresh()
                 },
-                "↺ รีเซ็ตการดูเรื่องนี้" to { Resume.confirmReset(this, s) { refresh() } },
-                "แก้ไขตอน / ตั้งค่า" to { openSeries(s.id) },
                 "เปลี่ยนชื่อ" to {
                     Dialogs.askText(this, "เปลี่ยนชื่อเรื่อง", s.name) { name ->
                         s.name = name
@@ -228,6 +248,7 @@ class MainActivity : ThemedActivity() {
                         refresh()
                     }
                 },
+                "↺ รีเซ็ตการดูเรื่องนี้" to { Resume.confirmReset(this, s) { refresh() } },
                 "ลบเรื่องนี้" to {
                     Dialogs.confirm(this, "ลบ “${s.name}” ออกจากรายการ?\n(ไฟล์วิดีโอในเครื่องจะไม่ถูกลบ)", "ลบ") {
                         Store.delete(this, s.id)
@@ -309,11 +330,8 @@ class MainActivity : ThemedActivity() {
 
     companion object {
         private const val MENU_ADD_CATEGORY = 1
-        private const val MENU_EXPAND = 2
-        private const val MENU_COLLAPSE = 3
         private const val MENU_RESET_ALL = 4
         private const val MENU_SEARCH = 5
         private const val MENU_THEME = 6
-        private const val PINNED_KEY = "\u0000pinned"
     }
 }

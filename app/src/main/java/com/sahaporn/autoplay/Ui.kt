@@ -1,17 +1,15 @@
 package com.sahaporn.autoplay
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.graphics.Color
-import android.graphics.Typeface
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.BaseAdapter
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -21,66 +19,34 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.recyclerview.widget.RecyclerView
 
-/** One line in a list: either a group header or an item, each with an optional ⋮ menu. */
-class Row(
-    val title: String,
-    val subtitle: String? = null,
-    val header: Boolean = false,
-    val highlight: Boolean = false,
-    /** Video uri to show a thumbnail for. */
-    val thumb: String? = null,
-    /** 0–100 for a progress bar, -1 for none. */
-    val progress: Int = -1,
-    val onMore: (() -> Unit)? = null,
-    val onClick: () -> Unit,
-)
+/** RecyclerView adapter that binds each item with a plain function. */
+class SimpleAdapter<T>(
+    private val layout: Int,
+    private val bind: (View, T) -> Unit,
+) : RecyclerView.Adapter<SimpleAdapter.Holder>() {
+    class Holder(view: View) : RecyclerView.ViewHolder(view)
 
-class RowAdapter(private val ctx: Context) : BaseAdapter() {
-    var rows: List<Row> = emptyList()
+    var items: List<T> = emptyList()
+        @SuppressLint("NotifyDataSetChanged")
         set(value) {
             field = value
             notifyDataSetChanged()
         }
 
-    override fun getCount() = rows.size
-    override fun getItem(position: Int) = rows[position]
-    override fun getItemId(position: Int) = position.toLong()
-    override fun getViewTypeCount() = 2
-    override fun getItemViewType(position: Int) = if (rows[position].header) 1 else 0
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
+        Holder(LayoutInflater.from(parent.context).inflate(layout, parent, false))
 
-    override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-        val row = rows[position]
-        val layout = if (row.header) R.layout.item_header else R.layout.item_row
-        val v = convertView ?: LayoutInflater.from(ctx).inflate(layout, parent, false)
-        val title = v.findViewById<TextView>(R.id.txtTitle)
-        title.text = row.title
-        if (!row.header) title.setTypeface(null, if (row.highlight) Typeface.BOLD else Typeface.NORMAL)
-        val sub = v.findViewById<TextView>(R.id.txtSubtitle)
-        sub.text = row.subtitle
-        sub.visibility = if (row.subtitle.isNullOrEmpty()) View.GONE else View.VISIBLE
-        v.findViewById<ImageView>(R.id.imgThumb)?.let { img ->
-            if (row.thumb == null) {
-                img.visibility = View.GONE
-            } else {
-                img.visibility = View.VISIBLE
-                Thumbs.load(ctx, row.thumb, img)
-            }
-        }
-        v.findViewById<ProgressBar>(R.id.progress)?.let { bar ->
-            bar.visibility = if (row.progress >= 0) View.VISIBLE else View.GONE
-            bar.progress = row.progress.coerceAtLeast(0)
-        }
-        val more = v.findViewById<View>(R.id.btnMore)
-        more.visibility = if (row.onMore == null) View.INVISIBLE else View.VISIBLE
-        more.setOnClickListener { row.onMore?.invoke() }
-        v.setOnClickListener { row.onClick() }
-        v.setOnLongClickListener {
-            row.onMore?.invoke()
-            row.onMore != null
-        }
-        return v
-    }
+    override fun getItemCount() = items.size
+
+    override fun onBindViewHolder(holder: Holder, position: Int) = bind(holder.itemView, items[position])
+}
+
+/** Shows a clip's watched share on a bar, hiding it when there is nothing to show. */
+fun ProgressBar.showPercent(pct: Int) {
+    visibility = if (pct in 1..99) View.VISIBLE else View.GONE
+    progress = pct.coerceAtLeast(0)
 }
 
 /** Android 15 draws apps edge to edge; pad so content never sits under the status or nav bar. */

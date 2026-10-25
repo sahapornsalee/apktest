@@ -2,11 +2,11 @@
 <resources>
     <!-- Accent colours the user can pick; applied on top of the activity theme. -->
     <style name="Accent.Red" parent="">
-        <item name="colorPrimary">#E53935</item>
-        <item name="colorPrimaryVariant">#B71C1C</item>
-        <item name="colorSecondary">#E53935</item>
-        <item name="colorSecondaryVariant">#B71C1C</item>
-        <item name="colorAccent">#E53935</item>
+        <item name="colorPrimary">#E50914</item>
+        <item name="colorPrimaryVariant">#B20710</item>
+        <item name="colorSecondary">#E50914</item>
+        <item name="colorSecondaryVariant">#B20710</item>
+        <item name="colorAccent">#E50914</item>
     </style>
     <style name="Accent.Pink" parent="">
         <item name="colorPrimary">#D81B60</item>

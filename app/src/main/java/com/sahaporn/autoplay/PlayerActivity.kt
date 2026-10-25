@@ -20,6 +20,10 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.ImageButton
+import android.widget.ImageView
+import android.widget.ProgressBar
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -32,10 +36,13 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -43,7 +50,11 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.card.MaterialCardView
 import com.google.common.util.concurrent.ListenableFuture
+import java.util.Locale
 import kotlin.math.abs
 
 @OptIn(UnstableApi::class)
@@ -57,6 +68,8 @@ class PlayerActivity : ThemedActivity() {
         private const val SEEK_STEP_MS = 10_000L
         private val RESIZE_NAMES = listOf("พอดีจอ", "เต็มจอ (ตัดขอบ)", "ยืดเต็มจอ")
         private val ORIENTATION_NAMES = listOf("อัตโนมัติตามคลิป", "แนวนอน", "แนวตั้ง", "หมุนตามเครื่อง")
+        private val SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+        private const val CONTROLS_TIMEOUT_MS = 4_000L
 
         fun start(ctx: Context, seriesId: String, index: Int, position: Long) {
             ctx.startActivity(
@@ -71,8 +84,19 @@ class PlayerActivity : ThemedActivity() {
     private lateinit var series: Series
     private lateinit var player: ExoPlayer
     private lateinit var playerView: PlayerView
-    private lateinit var topBar: View
+    private lateinit var controls: View
     private lateinit var txtTitle: TextView
+    private lateinit var btnPlay: ImageButton
+    private lateinit var seekBar: SeekBar
+    private lateinit var txtPosition: TextView
+    private lateinit var txtRemaining: TextView
+    private lateinit var btnSpeed: TextView
+    private lateinit var btnRotate: TextView
+    private lateinit var buffering: View
+    private lateinit var episodesPanel: View
+    private lateinit var btnPanelSeason: Button
+    private lateinit var panelList: RecyclerView
+    private lateinit var panelAdapter: SimpleAdapter<Int>
     private lateinit var txtSleep: TextView
     private lateinit var txtSeek: TextView
     private lateinit var btnSkip: Button
@@ -103,12 +127,15 @@ class PlayerActivity : ThemedActivity() {
     private var countdownLeft = 0
     private var skipAction: (() -> Unit)? = null
     private var controllerFuture: ListenableFuture<MediaController>? = null
+    private var dragging = false
+    private var panelSeason = ""
 
     private val ticker = object : Runnable {
         override fun run() {
             track()
             checkSkip()
             checkSleep()
+            updateProgressUi()
             handler.postDelayed(this, 250)
         }
     }
@@ -127,6 +154,7 @@ class PlayerActivity : ThemedActivity() {
 
     private val hideSeek = Runnable { txtSeek.visibility = View.GONE }
     private val hideUnlock = Runnable { btnUnlock.visibility = View.GONE }
+    private val hideControls = Runnable { setControlsVisible(false) }
 
     private val lockedBack = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
@@ -174,10 +202,16 @@ class PlayerActivity : ThemedActivity() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            buffering.visibility = if (playbackState == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
             if (playbackState == Player.STATE_ENDED) {
                 record(currentEpisode(), player.currentPosition, player.duration, ended = true)
                 onSeriesFinished()
             }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            btnPlay.setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
+            if (isPlaying) scheduleHide() else setControlsVisible(true)
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -208,8 +242,18 @@ class PlayerActivity : ThemedActivity() {
         series = s
 
         playerView = findViewById(R.id.playerView)
-        topBar = findViewById(R.id.topBar)
+        controls = findViewById(R.id.controls)
         txtTitle = findViewById(R.id.txtTitle)
+        btnPlay = findViewById(R.id.btnPlay)
+        seekBar = findViewById(R.id.seekBar)
+        txtPosition = findViewById(R.id.txtPosition)
+        txtRemaining = findViewById(R.id.txtRemaining)
+        btnSpeed = findViewById(R.id.btnSpeed)
+        btnRotate = findViewById(R.id.btnRotate)
+        buffering = findViewById(R.id.buffering)
+        episodesPanel = findViewById(R.id.episodesPanel)
+        btnPanelSeason = findViewById(R.id.btnPanelSeason)
+        panelList = findViewById(R.id.rvPanel)
         txtSleep = findViewById(R.id.txtSleep)
         txtSeek = findViewById(R.id.txtSeek)
         btnSkip = findViewById(R.id.btnSkip)
@@ -228,11 +272,7 @@ class PlayerActivity : ThemedActivity() {
             .setHandleAudioBecomingNoisy(true)
             .build()
         playerView.player = player
-        playerView.setControllerVisibilityListener(
-            PlayerView.ControllerVisibilityListener { visibility ->
-                topBar.visibility = if (locked || inPip) View.GONE else visibility
-            }
-        )
+        playerView.useController = false
         setupGestures()
 
         val items = s.episodes.map {
@@ -246,6 +286,12 @@ class PlayerActivity : ThemedActivity() {
         val startPos = intent.getLongExtra(EXTRA_POSITION, 0L).coerceAtLeast(0L)
         player.addListener(listener)
         player.setMediaItems(items, startIndex, startPos)
+        player.setPlaybackSpeed(s.speed)
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setPreferredAudioLanguage(s.audioLang)
+            .setPreferredTextLanguage(s.textLang)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, s.textOff)
+            .build()
         player.prepare()
         player.playWhenReady = true
 
@@ -254,10 +300,7 @@ class PlayerActivity : ThemedActivity() {
         updatePauseAtEnd()
         onBackPressedDispatcher.addCallback(this, lockedBack)
 
-        findViewById<Button>(R.id.btnClose).setOnClickListener { finish() }
-        findViewById<Button>(R.id.btnMenu).setOnClickListener { showMenu() }
-        findViewById<Button>(R.id.btnLock).setOnClickListener { lock() }
-        findViewById<Button>(R.id.btnResize).setOnClickListener { cycleResize() }
+        setupControls()
         findViewById<Button>(R.id.btnPlayNow).setOnClickListener { playNextNow() }
         findViewById<Button>(R.id.btnCancelNext).setOnClickListener { cancelNext() }
         btnSkip.setOnClickListener {
@@ -276,6 +319,246 @@ class PlayerActivity : ThemedActivity() {
 
         if (Settings.backgroundAudio(this)) connectSession()
         updateTitle()
+        setControlsVisible(true)
+    }
+
+    // ---- On-screen controls ----
+
+    private fun setupControls() {
+        fun tap(id: Int, action: () -> Unit) = findViewById<View>(id).setOnClickListener {
+            action()
+            scheduleHide()
+        }
+        tap(R.id.btnBack) { finish() }
+        tap(R.id.btnMore) { showMenu() }
+        tap(R.id.btnResize) { cycleResize() }
+        tap(R.id.btnRotate) { toggleRotation() }
+        btnRotate.setOnLongClickListener {
+            series.orientation = 0
+            applyOrientation()
+            updateRotateLabel()
+            saveProgress()
+            showToast("หมุนจออัตโนมัติตามคลิป")
+            true
+        }
+        tap(R.id.btnPlay) { if (player.isPlaying) player.pause() else player.play() }
+        tap(R.id.btnRew) { seekBy(-SEEK_STEP_MS) }
+        tap(R.id.btnFwd) { seekBy(SEEK_STEP_MS) }
+        tap(R.id.btnSpeed) { chooseSpeed() }
+        tap(R.id.btnLock) { lock() }
+        tap(R.id.btnEpisodes) { showEpisodesPanel() }
+        tap(R.id.btnTracks) { chooseTracks() }
+        tap(R.id.btnNextEp) { if (player.hasNextMediaItem()) playNextNow() else showToast("นี่คือตอนสุดท้ายแล้ว") }
+        findViewById<View>(R.id.btnPanelClose).setOnClickListener { hideEpisodesPanel() }
+        btnPanelSeason.setOnClickListener { choosePanelSeason() }
+
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                if (fromUser) txtPosition.text = TimeText.format(progress)
+            }
+
+            override fun onStartTrackingTouch(bar: SeekBar) {
+                dragging = true
+                handler.removeCallbacks(hideControls)
+            }
+
+            override fun onStopTrackingTouch(bar: SeekBar) {
+                dragging = false
+                player.seekTo(bar.progress * 1000L)
+                scheduleHide()
+            }
+        })
+
+        panelAdapter = SimpleAdapter(R.layout.item_episode_card) { v, i -> bindPanelCard(v, i) }
+        panelList.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        panelList.adapter = panelAdapter
+        updateSpeedLabel()
+        updateRotateLabel()
+    }
+
+    private fun setControlsVisible(visible: Boolean) {
+        if (!::controls.isInitialized) return
+        handler.removeCallbacks(hideControls)
+        if (visible && (locked || inPip || episodesPanel.visibility == View.VISIBLE)) return
+        controls.visibility = if (visible) View.VISIBLE else View.GONE
+        if (visible) {
+            updateProgressUi()
+            scheduleHide()
+        }
+    }
+
+    /** Fade the controls after a few seconds, but only while the video is playing. */
+    private fun scheduleHide() {
+        handler.removeCallbacks(hideControls)
+        if (::player.isInitialized && player.isPlaying && !dragging) handler.postDelayed(hideControls, CONTROLS_TIMEOUT_MS)
+    }
+
+    private fun updateProgressUi() {
+        if (!::player.isInitialized || dragging || controls.visibility != View.VISIBLE) return
+        val pos = player.currentPosition
+        val dur = player.duration
+        txtPosition.text = TimeText.ms(pos)
+        if (dur != C.TIME_UNSET && dur > 0) {
+            seekBar.max = (dur / 1000).toInt()
+            seekBar.progress = (pos / 1000).toInt()
+            seekBar.secondaryProgress = (player.bufferedPosition / 1000).toInt()
+            txtRemaining.text = "-${TimeText.ms(dur - pos)}"
+        } else {
+            txtRemaining.text = ""
+        }
+    }
+
+    private fun toggleRotation() {
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        series.orientation = if (landscape) 2 else 1
+        applyOrientation()
+        updateRotateLabel()
+        saveProgress()
+        showToast(if (landscape) "ล็อกแนวตั้ง · แตะค้างเพื่อหมุนอัตโนมัติ" else "ล็อกแนวนอน · แตะค้างเพื่อหมุนอัตโนมัติ")
+    }
+
+    private fun updateRotateLabel() {
+        btnRotate.text = when (series.orientation) {
+            1 -> "▭ แนวนอน"
+            2 -> "▯ แนวตั้ง"
+            3 -> "⟳ ตามเครื่อง"
+            else -> "⟳ หมุน"
+        }
+    }
+
+    private fun speedText(x: Float) = if (x == 1f) "1x" else "${x}x".replace(".0x", "x")
+
+    private fun updateSpeedLabel() {
+        btnSpeed.text = "⏲\nความเร็ว ${speedText(series.speed)}"
+    }
+
+    private fun chooseSpeed() {
+        Dialogs.menu(this, "ความเร็วในการเล่น", SPEEDS.map { x ->
+            val label = speedText(x) + if (x == 1f) " (ปกติ)" else ""
+            (if (x == series.speed) "✓ $label" else label) to {
+                series.speed = x
+                player.setPlaybackSpeed(x)
+                updateSpeedLabel()
+                saveProgress()
+            }
+        })
+    }
+
+    // ---- Audio and subtitle tracks ----
+
+    private fun trackName(f: Format, fallback: String): String {
+        val lang = f.language?.takeIf { it != C.LANGUAGE_UNDETERMINED }?.let {
+            Locale.forLanguageTag(it).getDisplayLanguage(Locale.forLanguageTag("th")).ifEmpty { it }
+        }
+        return listOfNotNull(f.label, lang).distinct().joinToString(" · ").ifEmpty { fallback }
+    }
+
+    private fun chooseTracks() {
+        val items = mutableListOf<Pair<CharSequence, () -> Unit>>()
+        val groups = player.currentTracks.groups
+        var n = 0
+        groups.filter { it.type == C.TRACK_TYPE_AUDIO }.forEach { g ->
+            for (i in 0 until g.length) {
+                if (!g.isTrackSupported(i)) continue
+                n++
+                val name = trackName(g.getTrackFormat(i), "เสียง $n")
+                items.add("${if (g.isTrackSelected(i)) "✓" else "   "} 🔊 $name" to { selectTrack(g, i) })
+            }
+        }
+        val texts = groups.filter { it.type == C.TRACK_TYPE_TEXT }
+        if (texts.isNotEmpty()) {
+            val off = texts.none { it.isSelected }
+            items.add("${if (off) "✓" else "   "} 💬 ปิดซับไตเติล" to {
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    .build()
+                series.textOff = true
+                saveProgress()
+            })
+            n = 0
+            texts.forEach { g ->
+                for (i in 0 until g.length) {
+                    if (!g.isTrackSupported(i)) continue
+                    n++
+                    val name = trackName(g.getTrackFormat(i), "ซับไตเติล $n")
+                    items.add("${if (g.isTrackSelected(i)) "✓" else "   "} 💬 $name" to { selectTrack(g, i) })
+                }
+            }
+        }
+        if (items.isEmpty()) {
+            showToast("ไฟล์นี้ไม่มีเสียงหรือซับไตเติลให้เลือก")
+            return
+        }
+        Dialogs.menu(this, "เสียงและซับไตเติล", items)
+    }
+
+    /** Picks a track and remembers its language, so later episodes use the same one. */
+    private fun selectTrack(g: Tracks.Group, index: Int) {
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(g.type, false)
+            .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, index))
+            .build()
+        val lang = g.getTrackFormat(index).language
+        if (g.type == C.TRACK_TYPE_AUDIO) {
+            series.audioLang = lang
+        } else {
+            series.textLang = lang
+            series.textOff = false
+        }
+        saveProgress()
+    }
+
+    // ---- Episode picker ----
+
+    private fun showEpisodesPanel() {
+        setControlsVisible(false)
+        panelSeason = currentEpisode().season
+        renderPanel()
+        episodesPanel.visibility = View.VISIBLE
+    }
+
+    private fun hideEpisodesPanel() {
+        episodesPanel.visibility = View.GONE
+        setControlsVisible(true)
+    }
+
+    private fun renderPanel() {
+        val seasons = series.seasons()
+        if (seasons.size > 1) {
+            btnPanelSeason.visibility = View.VISIBLE
+            btnPanelSeason.text = "${TimeText.seasonLabel(panelSeason)} ▾"
+        } else {
+            btnPanelSeason.visibility = View.GONE
+        }
+        val shown = series.episodes.indices.filter { seasons.size <= 1 || series.episodes[it].season == panelSeason }
+        panelAdapter.items = shown
+        val at = shown.indexOf(player.currentMediaItemIndex)
+        if (at >= 0) (panelList.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(at, 48)
+    }
+
+    private fun choosePanelSeason() {
+        Dialogs.menu(this, "เลือกภาค", series.seasons().map { s ->
+            "${if (s == panelSeason) "✓ " else ""}${TimeText.seasonLabel(s)}" to {
+                panelSeason = s
+                renderPanel()
+            }
+        })
+    }
+
+    private fun bindPanelCard(v: View, index: Int) {
+        val ep = series.episodes[index]
+        val current = index == player.currentMediaItemIndex
+        Thumbs.load(this, ep.uri, v.findViewById<ImageView>(R.id.imgThumb))
+        v.findViewById<MaterialCardView>(R.id.card).strokeWidth =
+            if (current) (3 * resources.displayMetrics.density).toInt() else 0
+        v.findViewById<TextView>(R.id.txtTitle).text = "${index + 1}. ${ep.shortName}"
+        v.findViewById<TextView>(R.id.txtSubtitle).text = if (current) "▶ กำลังเล่น" else TimeText.progress(ep)
+        v.findViewById<ProgressBar>(R.id.progress).showPercent(TimeText.percent(ep))
+        v.setOnClickListener {
+            episodesPanel.visibility = View.GONE
+            if (!current) player.seekTo(index, ep.resumePosition)
+            player.play()
+        }
     }
 
     private fun currentEpisode(): Episode = series.episodes[player.currentMediaItemIndex]
@@ -291,8 +574,9 @@ class PlayerActivity : ThemedActivity() {
                 when {
                     locked -> showUnlockHint()
                     inPip -> Unit
-                    playerView.isControllerFullyVisible -> playerView.hideController()
-                    else -> playerView.showController()
+                    episodesPanel.visibility == View.VISIBLE -> hideEpisodesPanel()
+                    controls.visibility == View.VISIBLE -> setControlsVisible(false)
+                    else -> setControlsVisible(true)
                 }
                 return true
             }
@@ -323,11 +607,10 @@ class PlayerActivity : ThemedActivity() {
     }
 
     private fun lock() {
+        setControlsVisible(false)
         locked = true
         lockedBack.isEnabled = true
-        playerView.hideController()
-        playerView.useController = false
-        topBar.visibility = View.GONE
+        episodesPanel.visibility = View.GONE
         hideSkipButton()
         showUnlockHint()
         showToast("ล็อกหน้าจอแล้ว · แตะค้างที่ 🔓 เพื่อปลดล็อก")
@@ -338,8 +621,7 @@ class PlayerActivity : ThemedActivity() {
         lockedBack.isEnabled = false
         handler.removeCallbacks(hideUnlock)
         btnUnlock.visibility = View.GONE
-        playerView.useController = true
-        playerView.showController()
+        setControlsVisible(true)
         showToast("ปลดล็อกแล้ว")
     }
 
@@ -419,9 +701,8 @@ class PlayerActivity : ThemedActivity() {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         inPip = isInPictureInPictureMode
         if (inPip) {
-            playerView.hideController()
-            playerView.useController = false
-            topBar.visibility = View.GONE
+            controls.visibility = View.GONE
+            episodesPanel.visibility = View.GONE
             hideSkipButton()
             countdownBox.visibility = View.GONE
             btnUnlock.visibility = View.GONE
@@ -431,7 +712,6 @@ class PlayerActivity : ThemedActivity() {
                 finish()
                 return
             }
-            playerView.useController = !locked
             if (countdownLeft > 0) countdownBox.visibility = View.VISIBLE
             applyOrientation()
         }
@@ -500,10 +780,6 @@ class PlayerActivity : ThemedActivity() {
                 "⏱ ตอนนี้ ($now) = จุดเริ่มเพลงปิด" to { chooseScope { only -> setOutroFrom(pos, only) } },
                 "⚙ พิมพ์เวลาข้ามเพลงเอง" to { chooseScope { only -> editSkipTimes(only) } },
                 "🎛 ตั้งค่าการเล่น" to { showPlaybackSettings() },
-                "☰ เลือกตอน" to { chooseEpisode() },
-                "⏭ ตอนต่อไป" to {
-                    if (player.hasNextMediaItem()) playNextNow() else showToast("นี่คือตอนสุดท้ายแล้ว")
-                },
             )
         )
     }
@@ -539,10 +815,13 @@ class PlayerActivity : ThemedActivity() {
                         "${if (i == series.orientation) "✓ " else ""}$name" to {
                             series.orientation = i
                             applyOrientation()
+                            updateRotateLabel()
                             saveProgress()
                         }
                     })
                 },
+                "⏲ ความเร็ว: ${speedText(series.speed)}" to { chooseSpeed() },
+                "💬 เสียงและซับไตเติล" to { chooseTracks() },
                 "🔲 ขนาดภาพ: $resize" to {
                     Dialogs.menu(this, "ขนาดภาพ", RESIZE_NAMES.mapIndexed { i, name ->
                         "${if (i == series.resizeMode) "✓ " else ""}$name" to { setResize(i) }
@@ -564,17 +843,6 @@ class PlayerActivity : ThemedActivity() {
                 "ทุกตอนในเรื่องนี้" to { onChosen(false) },
                 "เฉพาะตอนนี้" to { onChosen(true) },
             )
-        )
-    }
-
-    private fun chooseEpisode() {
-        val current = player.currentMediaItemIndex
-        Dialogs.menu(
-            this, "เลือกตอน", series.episodes.mapIndexed { i, e ->
-                "${if (i == current) "▶ " else ""}${i + 1}. ${e.name} · ${TimeText.progress(e)}" to {
-                    player.seekTo(i, e.resumePosition)
-                }
-            }
         )
     }
 
@@ -803,7 +1071,7 @@ class PlayerActivity : ThemedActivity() {
         record(currentEpisode(), position, duration, ended = true)
         series.lastWatchedAt = System.currentTimeMillis()
         Store.put(this, series)
-        if (!locked && !inPip) playerView.showController()
+        setControlsVisible(true)
         showToast(
             message ?: if (player.hasNextMediaItem()) "จบตอนนี้แล้ว · กด ⏭ เพื่อดูตอนต่อไป" else "จบตอนสุดท้ายแล้ว 🎉"
         )

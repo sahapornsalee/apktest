@@ -1,35 +1,43 @@
 package com.sahaporn.autoplay
 
+import android.graphics.Typeface
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
 import android.widget.Button
-import android.widget.ListView
+import android.widget.ImageView
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.SwitchCompat
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 
+/** Series detail: big play button, quick actions and the episode list, split by season. */
 class SeriesActivity : ThemedActivity() {
     companion object {
         const val EXTRA_ID = "series_id"
-        private const val MENU_ADD = 1
-        private const val MENU_SKIP = 2
-        private const val MENU_RENAME = 3
-        private const val MENU_CATEGORY = 4
-        private const val MENU_SORT = 5
-        private const val MENU_RESET = 6
-        private const val MENU_DELETE = 7
-        private const val MENU_THEME = 8
+        private const val MENU_MORE = 1
     }
 
     private lateinit var seriesId: String
     private lateinit var series: Series
+    private lateinit var imgHero: ImageView
+    private lateinit var txtHeroTitle: TextView
     private lateinit var txtInfo: TextView
+    private lateinit var txtSkipInfo: TextView
     private lateinit var btnResume: Button
+    private lateinit var progressResume: ProgressBar
+    private lateinit var txtResumeNote: TextView
     private lateinit var swAutoPlay: SwitchCompat
     private lateinit var swCountdown: SwitchCompat
-    private lateinit var adapter: RowAdapter
+    private lateinit var btnSeason: Button
+    private lateinit var adapter: SimpleAdapter<Int>
+
+    /** Season shown in the list; null when the series has no seasons. */
+    private var season: String? = null
 
     private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -54,17 +62,30 @@ class SeriesActivity : ThemedActivity() {
         setupBars(findViewById(R.id.root), toolbar)
 
         seriesId = intent.getStringExtra(EXTRA_ID) ?: run { finish(); return }
+        imgHero = findViewById(R.id.imgHero)
+        txtHeroTitle = findViewById(R.id.txtHeroTitle)
         txtInfo = findViewById(R.id.txtInfo)
+        txtSkipInfo = findViewById(R.id.txtSkipInfo)
         btnResume = findViewById(R.id.btnResume)
+        progressResume = findViewById(R.id.progressResume)
+        txtResumeNote = findViewById(R.id.txtResumeNote)
         swAutoPlay = findViewById(R.id.swAutoPlay)
         swCountdown = findViewById(R.id.swCountdown)
-        adapter = RowAdapter(this)
-        findViewById<ListView>(R.id.list).adapter = adapter
+        btnSeason = findViewById(R.id.btnSeason)
 
         btnResume.setOnClickListener { Resume.play(this, series) }
-        findViewById<Button>(R.id.btnResetAll).setOnClickListener { Resume.confirmReset(this, series) { render() } }
-        findViewById<Button>(R.id.btnSkip).setOnClickListener { showSkipDialog() }
-        findViewById<Button>(R.id.btnAdd).setOnClickListener { showAddDialog() }
+        findViewById<View>(R.id.btnRestart).setOnClickListener { Resume.confirmReset(this, series) { render() } }
+        findViewById<View>(R.id.btnSkip).setOnClickListener { showSkipDialog() }
+        findViewById<View>(R.id.btnAdd).setOnClickListener { showAddDialog() }
+        findViewById<View>(R.id.btnMoreActions).setOnClickListener { showMoreMenu() }
+        btnSeason.setOnClickListener { chooseSeason() }
+
+        adapter = SimpleAdapter(R.layout.item_episode) { v, i -> bindEpisode(v, i) }
+        findViewById<RecyclerView>(R.id.rvEpisodes).apply {
+            layoutManager = LinearLayoutManager(this@SeriesActivity)
+            isNestedScrollingEnabled = false
+            adapter = this@SeriesActivity.adapter
+        }
     }
 
     override fun onResume() {
@@ -79,46 +100,58 @@ class SeriesActivity : ThemedActivity() {
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menu.add(0, MENU_ADD, 0, "เพิ่มตอน")
-        menu.add(0, MENU_SKIP, 1, "ตั้งค่าข้ามเพลง (ทุกตอน)")
-        menu.add(0, MENU_RENAME, 2, "เปลี่ยนชื่อเรื่อง")
-        menu.add(0, MENU_CATEGORY, 3, "ย้ายหมวดหมู่")
-        menu.add(0, MENU_SORT, 4, "เรียงตอนตามชื่อไฟล์")
-        menu.add(0, MENU_RESET, 5, "รีเซ็ตการดูทั้งเรื่อง")
-        menu.add(0, MENU_THEME, 6, "🎨 ธีมและสี")
-        menu.add(0, MENU_DELETE, 7, "ลบเรื่องนี้")
+        menu.add(0, MENU_MORE, 0, "อื่นๆ").apply {
+            setIcon(R.drawable.ic_more)
+            setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        }
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        when (item.itemId) {
-            MENU_ADD -> showAddDialog()
-            MENU_THEME -> AppTheme.showPicker(this)
-            MENU_SKIP -> showSkipDialog()
-            MENU_RENAME -> Dialogs.askText(this, "เปลี่ยนชื่อเรื่อง", series.name) { name ->
-                series.name = name
-                save()
-            }
-            MENU_CATEGORY -> Dialogs.chooseCategory(this, series.category) { cat ->
-                series.category = cat
-                save()
-            }
-            MENU_SORT -> {
-                series.editEpisodes { eps ->
-                    val sorted = MediaScan.sorted(eps)
-                    eps.clear()
-                    eps.addAll(sorted)
-                }
-                save()
-            }
-            MENU_RESET -> Resume.confirmReset(this, series) { render() }
-            MENU_DELETE -> Dialogs.confirm(this, "ลบ “${series.name}” ออกจากรายการ?\n(ไฟล์วิดีโอในเครื่องจะไม่ถูกลบ)", "ลบ") {
-                Store.delete(this, series.id)
-                finish()
-            }
-            else -> return super.onOptionsItemSelected(item)
-        }
+        if (item.itemId != MENU_MORE) return super.onOptionsItemSelected(item)
+        showMoreMenu()
         return true
+    }
+
+    private fun showMoreMenu() {
+        Dialogs.menu(
+            this, series.name, listOf(
+                "＋ เพิ่มตอน" to { showAddDialog() },
+                "⏭ ตั้งค่าข้ามเพลง (ทุกตอน)" to { showSkipDialog() },
+                (if (series.pinned) "เลิกปักหมุด" else "📌 ปักหมุดไว้บนสุด") to {
+                    series.pinned = !series.pinned
+                    save()
+                },
+                "เปลี่ยนชื่อเรื่อง" to {
+                    Dialogs.askText(this, "เปลี่ยนชื่อเรื่อง", series.name) { name ->
+                        series.name = name
+                        save()
+                    }
+                },
+                "ย้ายหมวดหมู่" to {
+                    Dialogs.chooseCategory(this, series.category) { cat ->
+                        series.category = cat
+                        save()
+                    }
+                },
+                "เรียงตอนตามชื่อไฟล์" to {
+                    series.editEpisodes { eps ->
+                        val sorted = MediaScan.sorted(eps)
+                        eps.clear()
+                        eps.addAll(sorted)
+                    }
+                    save()
+                },
+                "↺ รีเซ็ตการดูทั้งเรื่อง" to { Resume.confirmReset(this, series) { render() } },
+                "🎨 ธีมและสี" to { AppTheme.showPicker(this) },
+                "ลบเรื่องนี้" to {
+                    Dialogs.confirm(this, "ลบ “${series.name}” ออกจากรายการ?\n(ไฟล์วิดีโอในเครื่องจะไม่ถูกลบ)", "ลบ") {
+                        Store.delete(this, series.id)
+                        finish()
+                    }
+                },
+            )
+        )
     }
 
     private fun save() {
@@ -128,23 +161,32 @@ class SeriesActivity : ThemedActivity() {
 
     private fun render() {
         title = series.name
-        val intro = if (series.skipIntro && series.introEnd > series.introStart) {
-            "ข้ามเพลงเปิด ${TimeText.format(series.introStart)}–${TimeText.format(series.introEnd)}"
-        } else if (series.skipIntro) {
-            "ยังไม่ได้ตั้งเวลาเพลงเปิด"
-        } else {
-            "ปิดการข้ามเพลงเปิด"
-        }
-        val outro = if (series.skipOutro && series.outroLength > 0) {
-            "ข้ามเพลงปิด ${TimeText.format(series.outroLength)} สุดท้าย"
-        } else if (series.skipOutro) {
-            "ยังไม่ได้ตั้งเวลาเพลงปิด"
-        } else {
-            "ปิดการข้ามเพลงปิด"
-        }
-        val mode = if (series.skipManual) " · แสดงปุ่มให้กดข้ามเอง" else ""
+        txtHeroTitle.text = series.name
+        if (series.lastIndex >= series.episodes.size) series.lastIndex = 0
+
+        val idx = series.resumeIndex()
+        val heroEp = series.episodes.getOrNull(idx ?: 0)
+        if (heroEp != null) Thumbs.load(this, heroEp.uri, imgHero) else imgHero.setImageDrawable(null)
+
         val cat = series.category.ifEmpty { "ไม่มีหมวดหมู่" }
-        txtInfo.text = "📁 $cat · ${series.episodes.size} ตอน · ดูจบแล้ว ${series.watchedCount} ตอน\n$intro\n$outro$mode"
+        val seasons = series.seasons()
+        val seasonNote = if (seasons.size > 1) " · ${seasons.size} ภาค" else ""
+        txtInfo.text = "📁 $cat$seasonNote · ${series.episodes.size} ตอน · ดูจบแล้ว ${series.watchedCount}"
+
+        btnResume.isEnabled = series.episodes.isNotEmpty()
+        btnResume.text = Resume.label(series)
+        val resumeEp = idx?.let { series.episodes[it] }
+        if (idx != null && resumeEp != null && resumeEp.hasProgress && resumeEp.duration > 0) {
+            progressResume.visibility = View.VISIBLE
+            progressResume.progress = TimeText.percent(resumeEp).coerceAtLeast(0)
+            txtResumeNote.visibility = View.VISIBLE
+            txtResumeNote.text = "ตอนที่ ${idx + 1} · เหลืออีก ${TimeText.ms(resumeEp.duration - resumeEp.position)}"
+        } else {
+            progressResume.visibility = View.GONE
+            txtResumeNote.visibility = View.GONE
+        }
+
+        txtSkipInfo.text = skipSummary()
         swAutoPlay.setOnCheckedChangeListener(null)
         swAutoPlay.isChecked = series.autoPlay
         swAutoPlay.setOnCheckedChangeListener { _, checked ->
@@ -160,24 +202,64 @@ class SeriesActivity : ThemedActivity() {
             toast(if (checked) "จะนับถอยหลัง 5 วินาทีก่อนไปตอนต่อไป" else "ไปตอนต่อไปทันที")
         }
 
-        if (series.lastIndex >= series.episodes.size) series.lastIndex = 0
-        btnResume.isEnabled = series.episodes.isNotEmpty()
-        btnResume.text = Resume.label(series)
-
-        adapter.rows = series.episodes.mapIndexed { i, e ->
-            val notes = mutableListOf<String>()
-            if (i == series.lastIndex && series.lastWatchedAt > 0) notes.add("👁 ดูล่าสุด")
-            notes.add(TimeText.progress(e))
-            if (e.hasOverride) notes.add("⚙ ตั้งเวลาข้ามเฉพาะตอนนี้")
-            Row(
-                title = "${i + 1}. ${e.name}",
-                subtitle = notes.joinToString(" · "),
-                highlight = i == series.lastIndex,
-                thumb = e.uri,
-                progress = TimeText.percent(e),
-                onMore = { episodeMenu(i) },
-            ) { playEpisode(i) }
+        if (seasons.size > 1) {
+            if (season !in seasons) season = heroEp?.season ?: seasons.first()
+            btnSeason.visibility = View.VISIBLE
+            btnSeason.text = "${TimeText.seasonLabel(season.orEmpty())} ▾"
+        } else {
+            season = null
+            btnSeason.visibility = View.GONE
         }
+        adapter.items = series.episodes.indices.filter { season == null || series.episodes[it].season == season }
+    }
+
+    private fun skipSummary(): String {
+        val intro = when {
+            !series.skipIntro -> "ไม่ข้ามเพลงเปิด"
+            series.introEnd > series.introStart ->
+                "ข้ามเพลงเปิด ${TimeText.format(series.introStart)}–${TimeText.format(series.introEnd)}"
+            else -> "ยังไม่ได้ตั้งเวลาเพลงเปิด"
+        }
+        val outro = when {
+            !series.skipOutro -> "ไม่ข้ามเพลงปิด"
+            series.outroLength > 0 -> "ข้ามเพลงปิด ${TimeText.format(series.outroLength)} สุดท้าย"
+            else -> "ยังไม่ได้ตั้งเวลาเพลงปิด"
+        }
+        val mode = if (series.skipManual) " · แบบกดปุ่มเอง" else ""
+        return "$intro · $outro$mode"
+    }
+
+    private fun chooseSeason() {
+        Dialogs.menu(this, "เลือกภาค", series.seasons().map { s ->
+            val count = series.episodes.count { it.season == s }
+            "${if (s == season) "✓ " else ""}${TimeText.seasonLabel(s)} ($count ตอน)" to {
+                season = s
+                render()
+            }
+        })
+    }
+
+    private fun bindEpisode(v: View, index: Int) {
+        val ep = series.episodes[index]
+        Thumbs.load(this, ep.uri, v.findViewById(R.id.imgThumb))
+        val current = index == series.lastIndex && series.lastWatchedAt > 0
+        v.findViewById<TextView>(R.id.txtTitle).apply {
+            text = "${index + 1}. ${ep.shortName}"
+            setTypeface(null, if (current) Typeface.BOLD else Typeface.NORMAL)
+        }
+        val notes = mutableListOf<String>()
+        if (current) notes.add("👁 ดูล่าสุด")
+        notes.add(TimeText.progress(ep))
+        if (ep.duration > 0 && !ep.hasProgress) notes.add(TimeText.ms(ep.duration))
+        if (ep.hasOverride) notes.add("⚙ เวลาข้ามเฉพาะตอน")
+        v.findViewById<TextView>(R.id.txtSubtitle).text = notes.joinToString(" · ")
+        v.findViewById<ProgressBar>(R.id.progress).showPercent(TimeText.percent(ep))
+        v.setOnClickListener { playEpisode(index) }
+        v.setOnLongClickListener {
+            episodeMenu(index)
+            true
+        }
+        v.findViewById<View>(R.id.btnMore).setOnClickListener { episodeMenu(index) }
     }
 
     private fun play(index: Int, position: Long) {
@@ -193,7 +275,7 @@ class SeriesActivity : ThemedActivity() {
             return
         }
         Dialogs.menu(
-            this, "${index + 1}. ${ep.name}", listOf(
+            this, "${index + 1}. ${ep.shortName}", listOf(
                 "▶ ดูต่อจาก ${TimeText.ms(ep.position)}" to { play(index, ep.position) },
                 "⏮ เริ่มตั้งแต่ต้นตอน" to { startOver(index) },
             )
@@ -208,7 +290,7 @@ class SeriesActivity : ThemedActivity() {
 
     private fun episodeMenu(index: Int) {
         val ep = series.episodes[index]
-        val items = mutableListOf<Pair<String, () -> Unit>>()
+        val items = mutableListOf<Pair<CharSequence, () -> Unit>>()
         if (!ep.watched && ep.position >= 5_000) {
             items.add("▶ ดูต่อจาก ${TimeText.ms(ep.position)}" to { play(index, ep.position) })
         }
@@ -218,39 +300,34 @@ class SeriesActivity : ThemedActivity() {
             save()
             toast("รีเซ็ตตอนนี้แล้ว")
         })
-        items.add(
-            if (ep.watched) {
-                "ทำเครื่องหมายว่ายังไม่ได้ดู" to {
-                    ep.watched = false
-                    save()
-                }
-            } else {
-                "✓ ทำเครื่องหมายว่าดูแล้ว" to {
-                    ep.watched = true
-                    ep.position = 0L
-                    save()
-                }
+        if (ep.watched) {
+            items.add("ทำเครื่องหมายว่ายังไม่ได้ดู" to {
+                ep.watched = false
+                save()
+            })
+        } else {
+            items.add("✓ ทำเครื่องหมายว่าดูแล้ว" to {
+                ep.watched = true
+                ep.position = 0L
+                save()
+            })
+        }
+        items.add("เปลี่ยนชื่อตอน" to {
+            Dialogs.askText(this, "เปลี่ยนชื่อตอน", ep.name) { name ->
+                ep.name = name
+                save()
             }
-        )
-        Dialogs.menu(
-            this, "${index + 1}. ${ep.name}", items + listOf(
-                "เปลี่ยนชื่อตอน" to {
-                    Dialogs.askText(this, "เปลี่ยนชื่อตอน", ep.name) { name ->
-                        ep.name = name
-                        save()
-                    }
-                },
-                "ตั้งเวลาข้ามเพลงเฉพาะตอนนี้" to { showEpisodeSkipDialog(ep) },
-                "เลื่อนขึ้น" to { moveEpisode(index, -1) },
-                "เลื่อนลง" to { moveEpisode(index, 1) },
-                "ลบตอนนี้ออกจากรายการ" to {
-                    Dialogs.confirm(this, "เอา “${ep.name}” ออกจากรายการ?", "เอาออก") {
-                        series.editEpisodes { it.removeAt(index) }
-                        save()
-                    }
-                },
-            )
-        )
+        })
+        items.add("ตั้งเวลาข้ามเพลงเฉพาะตอนนี้" to { showEpisodeSkipDialog(ep) })
+        items.add("เลื่อนขึ้น" to { moveEpisode(index, -1) })
+        items.add("เลื่อนลง" to { moveEpisode(index, 1) })
+        items.add("ลบตอนนี้ออกจากรายการ" to {
+            Dialogs.confirm(this, "เอา “${ep.shortName}” ออกจากรายการ?", "เอาออก") {
+                series.editEpisodes { it.removeAt(index) }
+                save()
+            }
+        })
+        Dialogs.menu(this, "${index + 1}. ${ep.shortName}", items)
     }
 
     private fun moveEpisode(index: Int, delta: Int) {
@@ -282,7 +359,7 @@ class SeriesActivity : ThemedActivity() {
             series.introStartOf(ep), series.introEndOf(ep), series.outroOf(ep), series.skipIntro, series.skipOutro,
         )
         Dialogs.skipSettings(
-            this, "ข้ามเพลงเฉพาะ: ${ep.name}", initial, showFlags = false,
+            this, "ข้ามเพลงเฉพาะ: ${ep.shortName}", initial, showFlags = false,
             onReset = {
                 ep.clearOverride()
                 save()
@@ -319,7 +396,7 @@ class SeriesActivity : ThemedActivity() {
                 }
                 series.editEpisodes { it.addAll(fresh) }
                 save()
-                toast("เพิ่ม ${fresh.size} ตอนต่อท้ายแล้ว (เรียงใหม่ได้จากเมนู)")
+                toast("เพิ่ม ${fresh.size} ตอนต่อท้ายแล้ว (เรียงใหม่ได้จากเมนู ⋯)")
             }
         }.start()
     }

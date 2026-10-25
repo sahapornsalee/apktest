@@ -13,7 +13,7 @@ object AppTheme {
     class Accent(val name: String, val color: Int, val style: Int)
 
     val ACCENTS = listOf(
-        Accent("แดง", 0xFFE53935.toInt(), R.style.Accent_Red),
+        Accent("แดง", 0xFFE50914.toInt(), R.style.Accent_Red),
         Accent("ชมพู", 0xFFD81B60.toInt(), R.style.Accent_Pink),
         Accent("ม่วง", 0xFF8E24AA.toInt(), R.style.Accent_Purple),
         Accent("คราม", 0xFF3949AB.toInt(), R.style.Accent_Indigo),
@@ -30,7 +30,7 @@ object AppTheme {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
-    fun mode(ctx: Context) = prefs(ctx).getInt("theme_mode", 0).coerceIn(0, MODES.size - 1)
+    fun mode(ctx: Context) = prefs(ctx).getInt("theme_mode", 2).coerceIn(0, MODES.size - 1)
     fun accent(ctx: Context) = prefs(ctx).getInt("theme_accent", 0).coerceIn(0, ACCENTS.size - 1)
 
     /** Changes whenever the look changes, so open screens know to redraw. */

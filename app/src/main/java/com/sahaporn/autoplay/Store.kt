@@ -23,6 +23,12 @@ data class Episode(
 
     val hasProgress: Boolean get() = watched || position >= 5_000
 
+    /** Sub-folder the clip came from (e.g. "Season 2"), "" when it sat in the chosen folder. */
+    val season: String get() = name.substringBeforeLast('/', "")
+
+    /** File name without its sub-folder. */
+    val shortName: String get() = name.substringAfterLast('/')
+
     fun clearOverride() {
         introStart = null
         introEnd = null
@@ -76,6 +82,10 @@ class Series(
     var pinned: Boolean = false,
     var orientation: Int = 0,
     var resizeMode: Int = 0,
+    var speed: Float = 1f,
+    var audioLang: String? = null,
+    var textLang: String? = null,
+    var textOff: Boolean = false,
     var lastIndex: Int = 0,
     var lastWatchedAt: Long = 0L,
 ) {
@@ -84,6 +94,9 @@ class Series(
     fun outroOf(ep: Episode) = ep.outroLength ?: outroLength
 
     val watchedCount: Int get() = episodes.count { it.watched }
+
+    /** Sub-folders in playing order; more than one means the series has seasons. */
+    fun seasons(): List<String> = episodes.map { it.season }.distinct()
 
     /**
      * The clip "continue watching" should open: the last one played if unfinished,
@@ -125,6 +138,10 @@ class Series(
         put("pinned", pinned)
         put("orientation", orientation)
         put("resizeMode", resizeMode)
+        put("speed", speed.toDouble())
+        audioLang?.let { put("audioLang", it) }
+        textLang?.let { put("textLang", it) }
+        put("textOff", textOff)
         put("lastIndex", lastIndex)
         put("lastWatchedAt", lastWatchedAt)
         put("episodes", JSONArray().apply { episodes.forEach { put(it.toJson()) } })
@@ -154,6 +171,10 @@ class Series(
                 pinned = o.optBoolean("pinned", false),
                 orientation = o.optInt("orientation", 0),
                 resizeMode = o.optInt("resizeMode", 0),
+                speed = o.optDouble("speed", 1.0).toFloat(),
+                audioLang = if (o.has("audioLang")) o.getString("audioLang") else null,
+                textLang = if (o.has("textLang")) o.getString("textLang") else null,
+                textOff = o.optBoolean("textOff", false),
                 lastIndex = lastIndex,
                 lastWatchedAt = o.optLong("lastWatchedAt", 0L),
             )
@@ -276,6 +297,8 @@ object TimeText {
     }
 
     fun format(seconds: Int): String = format(seconds.toLong())
+
+    fun seasonLabel(season: String): String = season.substringAfterLast('/').ifEmpty { "ตอนหลัก" }
 
     fun ms(millis: Long): String = format(millis.coerceAtLeast(0L) / 1000)
 

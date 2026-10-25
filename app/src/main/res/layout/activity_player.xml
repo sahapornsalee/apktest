@@ -11,6 +11,17 @@
         android:layout_height="match_parent"
         app:show_buffering="when_playing" />
 
+    <TextView
+        android:id="@+id/txtSeek"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@color/overlay"
+        android:padding="16dp"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:visibility="gone" />
+
     <LinearLayout
         android:id="@+id/topBar"
         android:layout_width="match_parent"
@@ -40,6 +51,32 @@
             android:textColor="#FFFFFF"
             android:textSize="15sp" />
 
+        <TextView
+            android:id="@+id/txtSleep"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textColor="#FFD54F"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/btnLock"
+            style="@style/OverlayButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🔒"
+            android:textSize="18sp" />
+
+        <Button
+            android:id="@+id/btnResize"
+            style="@style/OverlayButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⛶"
+            android:textSize="18sp" />
+
         <Button
             android:id="@+id/btnMenu"
             style="@style/OverlayButton"
@@ -48,4 +85,64 @@
             android:text="☰ เมนู"
             android:textSize="15sp" />
     </LinearLayout>
+
+    <Button
+        android:id="@+id/btnSkip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="32dp"
+        android:layout_marginBottom="96dp"
+        android:textSize="16sp"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/countdownBox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="32dp"
+        android:layout_marginBottom="96dp"
+        android:background="@color/overlay"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/txtCountdown"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxWidth="320dp"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnPlayNow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="▶ เล่นเลย" />
+
+            <Button
+                android:id="@+id/btnCancelNext"
+                style="@style/OverlayButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="ยกเลิก" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/btnUnlock"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="24dp"
+        android:text="🔓 แตะค้างเพื่อปลดล็อก"
+        android:visibility="gone" />
 </FrameLayout>

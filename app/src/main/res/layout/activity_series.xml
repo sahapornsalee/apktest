@@ -29,6 +29,14 @@
             android:text="เล่นตอนต่อไปอัตโนมัติ"
             android:textSize="15sp" />
 
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/swCountdown"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="นับถอยหลัง 5 วินาทีก่อนไปตอนต่อไป"
+            android:textSize="15sp" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

@@ -11,6 +11,8 @@ import android.widget.BaseAdapter
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -26,6 +28,10 @@ class Row(
     val subtitle: String? = null,
     val header: Boolean = false,
     val highlight: Boolean = false,
+    /** Video uri to show a thumbnail for. */
+    val thumb: String? = null,
+    /** 0–100 for a progress bar, -1 for none. */
+    val progress: Int = -1,
     val onMore: (() -> Unit)? = null,
     val onClick: () -> Unit,
 )
@@ -53,6 +59,18 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
         val sub = v.findViewById<TextView>(R.id.txtSubtitle)
         sub.text = row.subtitle
         sub.visibility = if (row.subtitle.isNullOrEmpty()) View.GONE else View.VISIBLE
+        v.findViewById<ImageView>(R.id.imgThumb)?.let { img ->
+            if (row.thumb == null) {
+                img.visibility = View.GONE
+            } else {
+                img.visibility = View.VISIBLE
+                Thumbs.load(ctx, row.thumb, img)
+            }
+        }
+        v.findViewById<ProgressBar>(R.id.progress)?.let { bar ->
+            bar.visibility = if (row.progress >= 0) View.VISIBLE else View.GONE
+            bar.progress = row.progress.coerceAtLeast(0)
+        }
         val more = v.findViewById<View>(R.id.btnMore)
         more.visibility = if (row.onMore == null) View.INVISIBLE else View.VISIBLE
         more.setOnClickListener { row.onMore?.invoke() }
@@ -86,6 +104,7 @@ class SkipValues(
     val outro: Int,
     val skipIntro: Boolean,
     val skipOutro: Boolean,
+    val skipManual: Boolean = false,
 )
 
 object Dialogs {
@@ -158,6 +177,7 @@ object Dialogs {
         val view = act.layoutInflater.inflate(R.layout.dialog_skip, null)
         val chkIntro = view.findViewById<CheckBox>(R.id.chkIntro)
         val chkOutro = view.findViewById<CheckBox>(R.id.chkOutro)
+        val chkManual = view.findViewById<CheckBox>(R.id.chkManual)
         val edIntroStart = view.findViewById<EditText>(R.id.edIntroStart)
         val edIntroEnd = view.findViewById<EditText>(R.id.edIntroEnd)
         val edOutro = view.findViewById<EditText>(R.id.edOutro)
@@ -166,6 +186,8 @@ object Dialogs {
         chkOutro.isChecked = initial.skipOutro
         chkIntro.visibility = if (showFlags) View.VISIBLE else View.GONE
         chkOutro.visibility = if (showFlags) View.VISIBLE else View.GONE
+        chkManual.isChecked = initial.skipManual
+        chkManual.visibility = if (showFlags) View.VISIBLE else View.GONE
         edIntroStart.setText(TimeText.format(initial.introStart))
         if (initial.introEnd > 0) edIntroEnd.setText(TimeText.format(initial.introEnd))
         if (initial.outro > 0) edOutro.setText(TimeText.format(initial.outro))
@@ -185,7 +207,7 @@ object Dialogs {
                     act.toast("เวลาจบเพลงเปิดต้องมากกว่าเวลาเริ่ม")
                     return@setPositiveButton
                 }
-                onSave(SkipValues(start, end, outro, chkIntro.isChecked, chkOutro.isChecked))
+                onSave(SkipValues(start, end, outro, chkIntro.isChecked, chkOutro.isChecked, chkManual.isChecked))
             }
             .setNegativeButton("ยกเลิก", null)
         if (onReset != null) builder.setNeutralButton("ใช้ค่าของเรื่อง") { _, _ -> onReset() }

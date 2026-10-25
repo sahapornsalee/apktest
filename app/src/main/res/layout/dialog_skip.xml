@@ -82,11 +82,18 @@
                 android:inputType="time" />
         </LinearLayout>
 
+        <CheckBox
+            android:id="@+id/chkManual"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="ไม่ข้ามเอง แต่แสดงปุ่ม “ข้ามเพลงเปิด / ตอนต่อไป” ให้กด (แบบ Netflix)" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="เคล็ดลับ: ระหว่างดูวิดีโอ แตะจอแล้วกดปุ่ม “จุดเริ่ม/จบเพลงเปิด” หรือ “จุดเริ่มเพลงปิด” ด้านบน เพื่อตั้งเวลาจากตำแหน่งที่กำลังดูได้เลย"
+            android:text="เคล็ดลับ: ระหว่างดูวิดีโอ แตะจอ แล้วกด “☰ เมนู” → “⏱ ตอนนี้ = …” เพื่อตั้งเวลาจากตำแหน่งที่กำลังดูได้เลย"
             android:textSize="12sp" />
     </LinearLayout>
 </ScrollView>

@@ -28,6 +28,7 @@ class SeriesActivity : AppCompatActivity() {
     private lateinit var txtInfo: TextView
     private lateinit var btnResume: Button
     private lateinit var swAutoPlay: SwitchCompat
+    private lateinit var swCountdown: SwitchCompat
     private lateinit var adapter: RowAdapter
 
     private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -56,6 +57,7 @@ class SeriesActivity : AppCompatActivity() {
         txtInfo = findViewById(R.id.txtInfo)
         btnResume = findViewById(R.id.btnResume)
         swAutoPlay = findViewById(R.id.swAutoPlay)
+        swCountdown = findViewById(R.id.swCountdown)
         adapter = RowAdapter(this)
         findViewById<ListView>(R.id.list).adapter = adapter
 
@@ -138,14 +140,22 @@ class SeriesActivity : AppCompatActivity() {
         } else {
             "ปิดการข้ามเพลงปิด"
         }
+        val mode = if (series.skipManual) " · แสดงปุ่มให้กดข้ามเอง" else ""
         val cat = series.category.ifEmpty { "ไม่มีหมวดหมู่" }
-        txtInfo.text = "📁 $cat · ${series.episodes.size} ตอน · ดูจบแล้ว ${series.watchedCount} ตอน\n$intro\n$outro"
+        txtInfo.text = "📁 $cat · ${series.episodes.size} ตอน · ดูจบแล้ว ${series.watchedCount} ตอน\n$intro\n$outro$mode"
         swAutoPlay.setOnCheckedChangeListener(null)
         swAutoPlay.isChecked = series.autoPlay
         swAutoPlay.setOnCheckedChangeListener { _, checked ->
             series.autoPlay = checked
             Store.put(this, series)
             toast(if (checked) "จบตอนแล้วไปตอนต่อไปเลย" else "จบตอนแล้วจะหยุดรอ")
+        }
+        swCountdown.setOnCheckedChangeListener(null)
+        swCountdown.isChecked = series.countdown
+        swCountdown.setOnCheckedChangeListener { _, checked ->
+            series.countdown = checked
+            Store.put(this, series)
+            toast(if (checked) "จะนับถอยหลัง 5 วินาทีก่อนไปตอนต่อไป" else "ไปตอนต่อไปทันที")
         }
 
         if (series.lastIndex >= series.episodes.size) series.lastIndex = 0
@@ -161,6 +171,8 @@ class SeriesActivity : AppCompatActivity() {
                 title = "${i + 1}. ${e.name}",
                 subtitle = notes.joinToString(" · "),
                 highlight = i == series.lastIndex,
+                thumb = e.uri,
+                progress = TimeText.percent(e),
                 onMore = { episodeMenu(i) },
             ) { playEpisode(i) }
         }
@@ -249,6 +261,7 @@ class SeriesActivity : AppCompatActivity() {
     private fun showSkipDialog() {
         val initial = SkipValues(
             series.introStart, series.introEnd, series.outroLength, series.skipIntro, series.skipOutro,
+            series.skipManual,
         )
         Dialogs.skipSettings(this, "ข้ามเพลงเปิด/ปิด (ทุกตอน)", initial, showFlags = true, onReset = null) { v ->
             series.introStart = v.introStart
@@ -256,6 +269,7 @@ class SeriesActivity : AppCompatActivity() {
             series.outroLength = v.outro
             series.skipIntro = v.skipIntro
             series.skipOutro = v.skipOutro
+            series.skipManual = v.skipManual
             save()
             toast("บันทึกแล้ว ใช้กับทุกตอน")
         }

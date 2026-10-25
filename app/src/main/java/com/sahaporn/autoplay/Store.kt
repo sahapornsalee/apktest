@@ -71,6 +71,11 @@ class Series(
     var skipIntro: Boolean = true,
     var skipOutro: Boolean = true,
     var autoPlay: Boolean = true,
+    var countdown: Boolean = false,
+    var skipManual: Boolean = false,
+    var pinned: Boolean = false,
+    var orientation: Int = 0,
+    var resizeMode: Int = 0,
     var lastIndex: Int = 0,
     var lastWatchedAt: Long = 0L,
 ) {
@@ -115,6 +120,11 @@ class Series(
         put("skipIntro", skipIntro)
         put("skipOutro", skipOutro)
         put("autoPlay", autoPlay)
+        put("countdown", countdown)
+        put("skipManual", skipManual)
+        put("pinned", pinned)
+        put("orientation", orientation)
+        put("resizeMode", resizeMode)
         put("lastIndex", lastIndex)
         put("lastWatchedAt", lastWatchedAt)
         put("episodes", JSONArray().apply { episodes.forEach { put(it.toJson()) } })
@@ -139,6 +149,11 @@ class Series(
                 skipIntro = o.optBoolean("skipIntro", true),
                 skipOutro = o.optBoolean("skipOutro", true),
                 autoPlay = o.optBoolean("autoPlay", true),
+                countdown = o.optBoolean("countdown", false),
+                skipManual = o.optBoolean("skipManual", false),
+                pinned = o.optBoolean("pinned", false),
+                orientation = o.optInt("orientation", 0),
+                resizeMode = o.optInt("resizeMode", 0),
                 lastIndex = lastIndex,
                 lastWatchedAt = o.optLong("lastWatchedAt", 0L),
             )
@@ -241,6 +256,17 @@ object Store {
     }
 }
 
+/** App-wide preferences that are not tied to one series. */
+object Settings {
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+
+    fun backgroundAudio(ctx: Context) = prefs(ctx).getBoolean("background_audio", false)
+    fun setBackgroundAudio(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("background_audio", on).apply()
+
+    fun autoPip(ctx: Context) = prefs(ctx).getBoolean("auto_pip", false)
+    fun setAutoPip(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("auto_pip", on).apply()
+}
+
 object TimeText {
     fun format(seconds: Long): String {
         val h = seconds / 3600
@@ -252,6 +278,13 @@ object TimeText {
     fun format(seconds: Int): String = format(seconds.toLong())
 
     fun ms(millis: Long): String = format(millis.coerceAtLeast(0L) / 1000)
+
+    /** Percent watched for a progress bar, or -1 when there is nothing to show. */
+    fun percent(ep: Episode): Int = when {
+        ep.watched -> 100
+        ep.position >= 5_000 && ep.duration > 0 -> (ep.position * 100 / ep.duration).toInt().coerceIn(1, 100)
+        else -> -1
+    }
 
     /** "12:34 / 45:00 (27%)" style progress for a clip. */
     fun progress(ep: Episode): String {

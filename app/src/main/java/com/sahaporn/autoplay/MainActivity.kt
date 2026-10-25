@@ -10,6 +10,7 @@ import android.widget.ListView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SearchView
 import com.google.android.material.appbar.MaterialToolbar
 
 class MainActivity : AppCompatActivity() {
@@ -18,6 +19,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var adapter: RowAdapter
     private lateinit var btnLatest: Button
     private val collapsed = mutableSetOf<String>()
+    private var query = ""
+    private var emptyText: CharSequence = ""
 
     /** Category for the series being added; null means ask after naming it. */
     private var pendingCategory: String? = null
@@ -47,6 +50,7 @@ class MainActivity : AppCompatActivity() {
         listView = findViewById(R.id.list)
         btnLatest = findViewById(R.id.btnLatest)
         txtEmpty = findViewById(R.id.txtEmpty)
+        emptyText = txtEmpty.text
         adapter = RowAdapter(this)
         listView.adapter = adapter
         findViewById<Button>(R.id.btnAdd).setOnClickListener { showAddDialog(null) }
@@ -58,7 +62,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menu.add(0, MENU_ADD_CATEGORY, 0, "+ หมวดหมู่").setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        val search = SearchView(this).apply {
+            queryHint = "ค้นหาเรื่องหรือตอน"
+            setOnQueryTextListener(object : SearchView.OnQueryTextListener {
+                override fun onQueryTextSubmit(text: String?): Boolean = false
+
+                override fun onQueryTextChange(text: String?): Boolean {
+                    query = text.orEmpty().trim()
+                    refresh()
+                    return true
+                }
+            })
+        }
+        menu.add(0, MENU_SEARCH, 0, "ค้นหา").apply {
+            setIcon(android.R.drawable.ic_menu_search)
+            actionView = search
+            setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS or MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW)
+            setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
+                override fun onMenuItemActionExpand(item: MenuItem): Boolean = true
+
+                override fun onMenuItemActionCollapse(item: MenuItem): Boolean {
+                    query = ""
+                    refresh()
+                    return true
+                }
+            })
+        }
+        menu.add(0, MENU_ADD_CATEGORY, 1, "+ หมวดหมู่").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
         menu.add(0, MENU_EXPAND, 1, "ขยายทุกหมวด")
         menu.add(0, MENU_COLLAPSE, 2, "ยุบทุกหมวด")
         menu.add(0, MENU_RESET_ALL, 3, "รีเซ็ตการดูทุกเรื่อง")
@@ -102,7 +132,7 @@ class MainActivity : AppCompatActivity() {
                     title = "${if (closed) "▸" else "▾"} $label",
                     subtitle = if (items.isEmpty()) "ว่าง — กด ⋮ เพื่อเพิ่มเรื่องในหมวดนี้" else "${items.size} เรื่อง",
                     header = true,
-                    onMore = if (cat.isEmpty()) null else ({ categoryMenu(cat) }),
+                    onMore = if (cat.isEmpty() || cat == PINNED_KEY) null else ({ categoryMenu(cat) }),
                 ) {
                     if (!collapsed.remove(cat)) collapsed.add(cat)
                     refresh()
@@ -111,26 +141,44 @@ class MainActivity : AppCompatActivity() {
             if (!closed) items.forEach { rows.add(seriesRow(it)) }
         }
 
-        if (cats.isEmpty()) {
-            all.forEach { rows.add(seriesRow(it)) }
+        val pinned = all.filter { it.pinned }
+        val rest = all.filter { !it.pinned }
+        if (query.isNotEmpty()) {
+            all.filter { matches(it) }.forEach { rows.add(seriesRow(it)) }
         } else {
-            cats.forEach { c -> addGroup(c, c, all.filter { it.category == c }) }
-            val loose = all.filter { it.category !in cats }
-            if (loose.isNotEmpty()) addGroup("", "ไม่มีหมวดหมู่", loose)
+            if (pinned.isNotEmpty()) addGroup(PINNED_KEY, "📌 ปักหมุด", pinned)
+            if (cats.isEmpty()) {
+                if (pinned.isEmpty()) {
+                    rest.forEach { rows.add(seriesRow(it)) }
+                } else if (rest.isNotEmpty()) {
+                    addGroup("", "เรื่องอื่นๆ", rest)
+                }
+            } else {
+                cats.forEach { c -> addGroup(c, c, rest.filter { it.category == c }) }
+                val loose = rest.filter { it.category !in cats }
+                if (loose.isNotEmpty()) addGroup("", "ไม่มีหมวดหมู่", loose)
+            }
         }
 
         val latest = Store.latest(this)
         btnLatest.visibility = if (latest == null) View.GONE else View.VISIBLE
+        if (query.isNotEmpty()) btnLatest.visibility = View.GONE
         if (latest != null) {
             btnLatest.text = "${Resume.label(latest)}\n${latest.name}"
             btnLatest.setOnClickListener { Resume.play(this, latest) }
         }
 
         val empty = rows.isEmpty()
+        txtEmpty.text = if (query.isNotEmpty()) "ไม่พบ “$query”" else emptyText
         txtEmpty.visibility = if (empty) View.VISIBLE else View.GONE
         listView.visibility = if (empty) View.GONE else View.VISIBLE
         adapter.rows = rows
     }
+
+    private fun matches(s: Series): Boolean =
+        s.name.contains(query, ignoreCase = true) ||
+            s.category.contains(query, ignoreCase = true) ||
+            s.episodes.any { it.name.contains(query, ignoreCase = true) }
 
     private fun seriesRow(s: Series): Row {
         val idx = s.resumeIndex()
@@ -139,9 +187,17 @@ class MainActivity : AppCompatActivity() {
             s.watchedCount == 0 && !s.episodes[idx].hasProgress -> "ยังไม่ได้ดู"
             else -> "ค้างตอนที่ ${idx + 1} · ${TimeText.ms(s.episodes[idx].resumePosition)}"
         }
+        val found = if (query.isNotEmpty() && !s.name.contains(query, ignoreCase = true)) {
+            s.episodes.firstOrNull { it.name.contains(query, ignoreCase = true) }?.let { "\n🔍 พบในตอน: ${it.name}" }
+        } else {
+            null
+        }
+        val cover = s.episodes.getOrNull(idx ?: 0)?.uri
         return Row(
-            title = s.name,
-            subtitle = "${s.episodes.size} ตอน · ดูจบ ${s.watchedCount} · $status",
+            title = if (s.pinned) "📌 ${s.name}" else s.name,
+            thumb = cover,
+            progress = if (s.episodes.isEmpty()) -1 else s.watchedCount * 100 / s.episodes.size,
+            subtitle = "${s.episodes.size} ตอน · ดูจบ ${s.watchedCount} · $status${found ?: ""}",
             onMore = { seriesMenu(s) },
         ) { openSeries(s.id) }
     }
@@ -150,6 +206,11 @@ class MainActivity : AppCompatActivity() {
         Dialogs.menu(
             this, s.name, listOf(
                 Resume.label(s) to { Resume.play(this, s) },
+                (if (s.pinned) "เลิกปักหมุด" else "📌 ปักหมุดไว้บนสุด") to {
+                    s.pinned = !s.pinned
+                    Store.put(this, s)
+                    refresh()
+                },
                 "↺ รีเซ็ตการดูเรื่องนี้" to { Resume.confirmReset(this, s) { refresh() } },
                 "แก้ไขตอน / ตั้งค่า" to { openSeries(s.id) },
                 "เปลี่ยนชื่อ" to {
@@ -250,5 +311,7 @@ class MainActivity : AppCompatActivity() {
         private const val MENU_EXPAND = 2
         private const val MENU_COLLAPSE = 3
         private const val MENU_RESET_ALL = 4
+        private const val MENU_SEARCH = 5
+        private const val PINNED_KEY = "\u0000pinned"
     }
 }

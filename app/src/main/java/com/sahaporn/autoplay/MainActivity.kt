@@ -292,7 +292,7 @@ class MainActivity : ThemedActivity() {
         Dialogs.menu(
             this, "เพิ่มเรื่องใหม่", listOf(
                 "เลือกทั้งโฟลเดอร์ (แนะนำ)" to { pickFolder.launch(null) },
-                "เลือกไฟล์วิดีโอทีละหลายไฟล์" to { pickFiles.launch(arrayOf("video/*")) },
+                "เลือกไฟล์วิดีโอทีละหลายไฟล์" to { pickFiles.launch(arrayOf("*/*")) },
             )
         )
     }

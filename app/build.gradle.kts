@@ -15,6 +15,10 @@ android {
         targetSdk = 35
         versionCode = buildNumber
         versionName = "1.0.$buildNumber"
+        // Phones only; keeps the VLC and FFmpeg native libraries from bloating the APK.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     signingConfigs {
@@ -54,4 +58,9 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
+    implementation("androidx.media3:media3-decoder:1.5.1")
+    // FFmpeg audio decoders (AC3, E-AC3, DTS, TrueHD, ...) for the main player.
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
+    // Backup player that decodes nearly any format, in software when needed.
+    implementation("org.videolan.android:libvlc-all:3.6.0")
 }

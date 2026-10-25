@@ -33,6 +33,12 @@
             android:supportsPictureInPicture="true"
             android:theme="@style/Theme.AutoPlay.Player" />
 
+        <activity
+            android:name=".VlcPlayerActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:exported="false"
+            android:theme="@style/Theme.AutoPlay.Player" />
+
         <service
             android:name=".PlaybackService"
             android:exported="true"

@@ -86,6 +86,8 @@ class Series(
     var audioLang: String? = null,
     var textLang: String? = null,
     var textOff: Boolean = false,
+    var engine: Int = Engines.AUTO,
+    var vlcHardware: Boolean = true,
     var lastIndex: Int = 0,
     var lastWatchedAt: Long = 0L,
 ) {
@@ -108,6 +110,22 @@ class Series(
         if (!episodes[last].watched) return last
         val order = (last + 1 until episodes.size) + (0 until last)
         return order.firstOrNull { !episodes[it].watched }
+    }
+
+    /** Saves a clip's spot; near the end (or past the outro) it counts as watched. */
+    fun recordProgress(ep: Episode, position: Long, duration: Long, ended: Boolean) {
+        if (duration > 0) ep.duration = duration
+        val d = ep.duration
+        val outro = outroOf(ep) * 1000L
+        val nearEnd = ended || (d > 0 && (position >= d * 95 / 100 ||
+            (skipOutro && outro > 0 && position >= d - outro - 1_500)))
+        if (nearEnd) {
+            ep.watched = true
+            ep.position = 0L
+        } else {
+            ep.position = position
+            if (position >= 5_000) ep.watched = false
+        }
     }
 
     fun resetProgress() {
@@ -142,6 +160,8 @@ class Series(
         audioLang?.let { put("audioLang", it) }
         textLang?.let { put("textLang", it) }
         put("textOff", textOff)
+        put("engine", engine)
+        put("vlcHardware", vlcHardware)
         put("lastIndex", lastIndex)
         put("lastWatchedAt", lastWatchedAt)
         put("episodes", JSONArray().apply { episodes.forEach { put(it.toJson()) } })
@@ -175,6 +195,8 @@ class Series(
                 audioLang = if (o.has("audioLang")) o.getString("audioLang") else null,
                 textLang = if (o.has("textLang")) o.getString("textLang") else null,
                 textOff = o.optBoolean("textOff", false),
+                engine = o.optInt("engine", Engines.AUTO),
+                vlcHardware = o.optBoolean("vlcHardware", true),
                 lastIndex = lastIndex,
                 lastWatchedAt = o.optLong("lastWatchedAt", 0L),
             )
@@ -274,6 +296,33 @@ object Store {
         if (i < 0 || j !in list.indices) return
         list.add(j, list.removeAt(i))
         saveCategories(ctx, list)
+    }
+}
+
+/** Which player opens a series: ExoPlayer (full features) or VLC (plays nearly any file). */
+object Engines {
+    const val AUTO = 0
+    const val MAIN = 1
+    const val VLC = 2
+
+    val NAMES = listOf(
+        "อัตโนมัติ (เลือกให้ตามชนิดไฟล์)",
+        "ตัวเล่นหลัก (ฟีเจอร์ครบ)",
+        "ตัวเล่นสำรอง VLC (เปิดได้แทบทุกไฟล์)",
+    )
+
+    /** Formats the main player handles poorly or not at all. */
+    private val VLC_EXT = setOf(
+        "avi", "divx", "xvid", "wmv", "asf", "flv", "f4v", "rm", "rmvb", "vob", "mpg", "mpeg", "mpe",
+        "m1v", "m2v", "mxf", "dv", "ogm", "amv", "mts", "m2ts", "m2t", "tp", "trp",
+    )
+
+    fun needsVlc(ep: Episode) = ep.name.substringAfterLast('.', "").lowercase() in VLC_EXT
+
+    fun useVlc(s: Series, index: Int): Boolean = when (s.engine) {
+        VLC -> true
+        MAIN -> false
+        else -> s.episodes.getOrNull(index)?.let { needsVlc(it) } ?: false
     }
 }
 

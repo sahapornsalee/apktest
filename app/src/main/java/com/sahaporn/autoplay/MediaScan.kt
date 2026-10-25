@@ -7,10 +7,12 @@ import androidx.documentfile.provider.DocumentFile
 
 object MediaScan {
     private val VIDEO_EXT = setOf(
-        "mp4", "mkv", "avi", "mov", "webm", "m4v", "3gp", "ts", "flv", "wmv", "mpg", "mpeg",
+        "mp4", "m4v", "mkv", "mk3d", "webm", "mov", "qt", "3gp", "3g2", "ts", "mts", "m2ts", "m2t", "tp", "trp",
+        "avi", "divx", "xvid", "wmv", "asf", "flv", "f4v", "mpg", "mpeg", "mpe", "m1v", "m2v", "vob",
+        "ogv", "ogm", "rm", "rmvb", "dv", "mxf", "amv", "y4m", "h264", "h265", "hevc", "264", "265",
     )
 
-    private fun isVideo(name: String, type: String?): Boolean =
+    fun isVideo(name: String, type: String?): Boolean =
         type?.startsWith("video/") == true || name.substringAfterLast('.', "").lowercase() in VIDEO_EXT
 
     fun persist(ctx: Context, uri: Uri) {
@@ -41,8 +43,11 @@ object MediaScan {
         return sorted(out)
     }
 
-    fun fromUris(ctx: Context, uris: List<Uri>): List<Episode> = sorted(uris.map {
-        Episode(it.toString(), DocumentFile.fromSingleUri(ctx, it)?.name ?: it.lastPathSegment ?: "video")
+    /** Picked files; anything that is clearly not a video (by name and type) is left out. */
+    fun fromUris(ctx: Context, uris: List<Uri>): List<Episode> = sorted(uris.mapNotNull {
+        val doc = DocumentFile.fromSingleUri(ctx, it)
+        val name = doc?.name ?: it.lastPathSegment ?: "video"
+        if (isVideo(name, doc?.type)) Episode(it.toString(), name) else null
     })
 
     fun sorted(list: List<Episode>): List<Episode> =

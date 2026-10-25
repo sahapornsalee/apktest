@@ -45,7 +45,11 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -71,7 +75,13 @@ class PlayerActivity : ThemedActivity() {
         private val SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
         private const val CONTROLS_TIMEOUT_MS = 4_000L
 
+        /** Opens the series in whichever player suits it (see [Engines]). */
         fun start(ctx: Context, seriesId: String, index: Int, position: Long) {
+            val s = Store.get(ctx, seriesId)
+            if (s != null && Engines.useVlc(s, index)) {
+                VlcPlayerActivity.start(ctx, seriesId, index, position)
+                return
+            }
             ctx.startActivity(
                 Intent(ctx, PlayerActivity::class.java)
                     .putExtra(EXTRA_ID, seriesId)
@@ -192,6 +202,10 @@ class PlayerActivity : ThemedActivity() {
             updateSleepLabel()
             updateTitle()
             saveProgress()
+            // In automatic mode, formats the main player is weak at continue in VLC.
+            if (series.engine == Engines.AUTO && Engines.needsVlc(series.episodes[index])) {
+                switchToVlc(remember = false, software = false)
+            }
         }
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -219,6 +233,11 @@ class PlayerActivity : ThemedActivity() {
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            if (series.engine != Engines.MAIN) {
+                showToast("ตัวเล่นหลักเปิดไฟล์นี้ไม่ได้ · สลับไปตัวเล่นสำรอง VLC")
+                switchToVlc(remember = false, software = false)
+                return
+            }
             showToast("เล่นไฟล์นี้ไม่ได้ (${error.errorCodeName})")
             if (player.hasNextMediaItem()) {
                 player.seekToNextMediaItem()
@@ -265,7 +284,18 @@ class PlayerActivity : ThemedActivity() {
             .setUsage(C.USAGE_MEDIA)
             .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
             .build()
-        player = ExoPlayer.Builder(this)
+        // FFmpeg takes over audio the phone can't decode; a failing video decoder falls back to another one.
+        val renderers = DefaultRenderersFactory(this)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setEnableDecoderFallback(true)
+        // Seek in files without an index, and play TS recordings that lack IDR frames.
+        val extractors = DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
+            .setTsExtractorFlags(
+                DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or
+                    DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+            )
+        player = ExoPlayer.Builder(this, renderers, DefaultMediaSourceFactory(this, extractors))
             .setSeekBackIncrementMs(SEEK_STEP_MS)
             .setSeekForwardIncrementMs(SEEK_STEP_MS)
             .setAudioAttributes(audio, true)
@@ -765,6 +795,7 @@ class PlayerActivity : ThemedActivity() {
                 "⏾ ตั้งเวลาปิด$sleepNote" to { showSleepMenu() },
                 "1️⃣ ดูอีกตอนเดียวแล้วหยุด" to { oneMoreEpisode() },
                 "🗗 ดูแบบจอลอย" to { enterPip() },
+                "🛠 ภาพแตก / เล่นไม่ได้? เปิดด้วยตัวเล่นสำรอง VLC" to { switchToVlc(remember = true, software = true) },
                 "${check(series.skipIntro)} ข้ามเพลงเปิด$introNote" to {
                     series.skipIntro = !series.skipIntro
                     saveProgress()
@@ -844,6 +875,24 @@ class PlayerActivity : ThemedActivity() {
                 "เฉพาะตอนนี้" to { onChosen(true) },
             )
         )
+    }
+
+    /**
+     * Continues this clip in the VLC player. [remember] makes VLC the series' player from now on;
+     * [software] turns off hardware decoding, which fixes blocky or smeared pictures.
+     */
+    private fun switchToVlc(remember: Boolean, software: Boolean) {
+        if (finished) return
+        val index = player.currentMediaItemIndex
+        val position = player.currentPosition
+        saveProgress()
+        if (remember) series.engine = Engines.VLC
+        if (software) series.vlcHardware = false
+        Store.put(this, series)
+        finished = true
+        player.pause()
+        VlcPlayerActivity.start(this, series.id, index, position)
+        finish()
     }
 
     // ---- Skip times ----
@@ -1153,20 +1202,8 @@ class PlayerActivity : ThemedActivity() {
         if (player.isPlaying && now - lastSavedAt > 5_000) saveProgress()
     }
 
-    /** Saves a clip's spot; near the end (or past the outro) it counts as watched. */
     private fun record(ep: Episode, position: Long, duration: Long, ended: Boolean) {
-        if (duration != C.TIME_UNSET && duration > 0) ep.duration = duration
-        val d = ep.duration
-        val outro = series.outroOf(ep) * 1000L
-        val nearEnd = ended || (d > 0 && (position >= d * 95 / 100 ||
-            (series.skipOutro && outro > 0 && position >= d - outro - 1_500)))
-        if (nearEnd) {
-            ep.watched = true
-            ep.position = 0L
-        } else {
-            ep.position = position
-            if (position >= 5_000) ep.watched = false
-        }
+        series.recordProgress(ep, if (position < 0) 0L else position, duration, ended)
     }
 
     private fun onSeriesFinished() {

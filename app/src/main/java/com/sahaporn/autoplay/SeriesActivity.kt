@@ -134,6 +134,7 @@ class SeriesActivity : ThemedActivity() {
                         save()
                     }
                 },
+                "🎬 ตัวเล่น: ${Engines.NAMES[series.engine.coerceIn(0, 2)]}" to { chooseEngine() },
                 "เรียงตอนตามชื่อไฟล์" to {
                     series.editEpisodes { eps ->
                         val sorted = MediaScan.sorted(eps)
@@ -152,6 +153,15 @@ class SeriesActivity : ThemedActivity() {
                 },
             )
         )
+    }
+
+    private fun chooseEngine() {
+        Dialogs.menu(this, "เลือกตัวเล่น", Engines.NAMES.mapIndexed { i, name ->
+            (if (i == series.engine) "✓ $name" else name) to {
+                series.engine = i
+                save()
+            }
+        })
     }
 
     private fun save() {
@@ -378,7 +388,7 @@ class SeriesActivity : ThemedActivity() {
         Dialogs.menu(
             this, "เพิ่มตอน", listOf(
                 "เพิ่มจากโฟลเดอร์" to { pickFolder.launch(null) },
-                "เพิ่มไฟล์วิดีโอ" to { pickFiles.launch(arrayOf("video/*")) },
+                "เพิ่มไฟล์วิดีโอ" to { pickFiles.launch(arrayOf("*/*")) },
             )
         )
     }

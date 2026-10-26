@@ -10,17 +10,19 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.EditText
-import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.bottomsheet.BottomSheetBehavior
+import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 /** RecyclerView adapter that binds each item with a plain function. */
 class SimpleAdapter<T>(
@@ -84,27 +86,41 @@ class SkipValues(
 )
 
 object Dialogs {
+    /** A list of choices in a sheet that slides up from the bottom. */
     fun menu(act: Activity, title: String, items: List<Pair<CharSequence, () -> Unit>>) {
-        AlertDialog.Builder(act)
-            .setTitle(title)
-            .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }
-            .show()
+        val sheet = BottomSheetDialog(act)
+        val view = act.layoutInflater.inflate(R.layout.sheet_menu, null)
+        view.findViewById<TextView>(R.id.txtSheetTitle).text = title
+        val list = view.findViewById<LinearLayout>(R.id.sheetItems)
+        items.forEach { (label, action) ->
+            val row = act.layoutInflater.inflate(R.layout.item_sheet_row, list, false) as TextView
+            row.text = label
+            row.setOnClickListener {
+                sheet.dismiss()
+                action()
+            }
+            list.addView(row)
+        }
+        sheet.setContentView(view)
+        sheet.behavior.state = BottomSheetBehavior.STATE_EXPANDED
+        sheet.behavior.skipCollapsed = true
+        sheet.show()
+    }
+
+    /** Pick one of [options]; the current one is ticked. */
+    fun choose(act: Activity, title: String, options: List<String>, selected: Int, onPick: (Int) -> Unit) {
+        menu(act, title, options.mapIndexed { i, name ->
+            (if (i == selected) "✓  $name" else name) to { onPick(i) }
+        })
     }
 
     fun askText(act: Activity, title: String, initial: String, onOk: (String) -> Unit) {
-        val input = EditText(act).apply {
-            setText(initial)
-            setSelectAllOnFocus(true)
-            isSingleLine = true
-        }
-        val pad = (20 * act.resources.displayMetrics.density).toInt()
-        val box = FrameLayout(act).apply {
-            setPadding(pad, pad / 2, pad, 0)
-            addView(input)
-        }
-        AlertDialog.Builder(act)
+        val view = act.layoutInflater.inflate(R.layout.dialog_text, null)
+        val input = view.findViewById<EditText>(R.id.edText)
+        input.setText(initial)
+        MaterialAlertDialogBuilder(act)
             .setTitle(title)
-            .setView(box)
+            .setView(view)
             .setPositiveButton("ตกลง") { _, _ ->
                 val text = input.text.toString().trim()
                 if (text.isEmpty()) act.toast("ยังไม่ได้ใส่ชื่อ") else onOk(text)
@@ -115,7 +131,7 @@ object Dialogs {
     }
 
     fun confirm(act: Activity, message: String, okText: String, onOk: () -> Unit) {
-        AlertDialog.Builder(act)
+        MaterialAlertDialogBuilder(act)
             .setMessage(message)
             .setPositiveButton(okText) { _, _ -> onOk() }
             .setNegativeButton("ยกเลิก", null)
@@ -168,7 +184,7 @@ object Dialogs {
         if (initial.introEnd > 0) edIntroEnd.setText(TimeText.format(initial.introEnd))
         if (initial.outro > 0) edOutro.setText(TimeText.format(initial.outro))
 
-        val builder = AlertDialog.Builder(act)
+        val builder = MaterialAlertDialogBuilder(act)
             .setTitle(title)
             .setView(view)
             .setPositiveButton("บันทึก") { _, _ ->

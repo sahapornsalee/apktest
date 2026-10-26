@@ -2,13 +2,19 @@ package com.sahaporn.autoplay
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationManager
 import android.app.PictureInPictureParams
-import android.content.ComponentName
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.media.AudioManager
+import android.media.MediaMetadata
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -17,6 +23,7 @@ import android.os.Looper
 import android.util.Rational
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
@@ -34,55 +41,35 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
-import androidx.media3.common.Format
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.common.TrackSelectionOverride
-import androidx.media3.common.Tracks
-import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.extractor.DefaultExtractorsFactory
-import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
-import androidx.media3.session.MediaController
-import androidx.media3.session.SessionToken
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.card.MaterialCardView
-import com.google.common.util.concurrent.ListenableFuture
-import java.util.Locale
+import org.videolan.libvlc.util.VLCVideoLayout
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
+/**
+ * The video player. One screen and one set of controls; the picture comes from one of three
+ * engines (see [Engines]). Each clip starts on its preferred engine and moves on to the next one
+ * by itself when it can't be played, so a file the phone can open always gets a chance.
+ */
 @OptIn(UnstableApi::class)
-class PlayerActivity : ThemedActivity() {
+class PlayerActivity : ThemedActivity(), EngineHost {
     companion object {
         const val EXTRA_ID = "series_id"
         const val EXTRA_INDEX = "index"
         const val EXTRA_POSITION = "position"
 
         private const val COUNTDOWN_SECONDS = 5
-        private const val SEEK_STEP_MS = 10_000L
+        private const val CONTROLS_TIMEOUT_MS = 4_000L
+        private val SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
         private val RESIZE_NAMES = listOf("พอดีจอ", "เต็มจอ (ตัดขอบ)", "ยืดเต็มจอ")
         private val ORIENTATION_NAMES = listOf("อัตโนมัติตามคลิป", "แนวนอน", "แนวตั้ง", "หมุนตามเครื่อง")
-        private val SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
-        private const val CONTROLS_TIMEOUT_MS = 4_000L
 
-        /** Opens the series in whichever player suits it (see [Engines]). */
         fun start(ctx: Context, seriesId: String, index: Int, position: Long) {
-            val s = Store.get(ctx, seriesId)
-            val backup = s?.let { Engines.backupFor(it, index) }
-            if (backup != null) {
-                BackupPlayerActivity.start(ctx, seriesId, index, position, backup)
-                return
-            }
             ctx.startActivity(
                 Intent(ctx, PlayerActivity::class.java)
                     .putExtra(EXTRA_ID, seriesId)
@@ -92,43 +79,57 @@ class PlayerActivity : ThemedActivity() {
         }
     }
 
+    private enum class Drag { NONE, IGNORE, SEEK, BRIGHTNESS, VOLUME }
+
     private lateinit var series: Series
-    private lateinit var player: ExoPlayer
-    private lateinit var playerView: PlayerView
+    private lateinit var engine: ClipEngine
+    private var engineKind = Engines.MAIN
+
+    /** In automatic mode, the engine that rescued a clip; the clips after it try that one first. */
+    private var sessionEngine: Int? = null
+    private val triedEngines = mutableSetOf<Int>()
+    private var index = 0
+
+    private lateinit var videoFrame: View
+    private lateinit var exoView: PlayerView
+    private lateinit var vlcLayout: VLCVideoLayout
+    private lateinit var systemFrame: AspectRatioFrameLayout
+    private lateinit var systemSurface: SurfaceView
     private lateinit var controls: View
+    private lateinit var txtSeriesName: TextView
     private lateinit var txtTitle: TextView
+    private lateinit var txtSleep: TextView
+    private lateinit var btnEngine: TextView
+    private lateinit var btnRotate: TextView
     private lateinit var btnPlay: ImageButton
+    private lateinit var btnRew: TextView
+    private lateinit var btnFwd: TextView
     private lateinit var seekBar: SeekBar
     private lateinit var txtPosition: TextView
     private lateinit var txtRemaining: TextView
     private lateinit var btnSpeed: TextView
-    private lateinit var btnRotate: TextView
     private lateinit var buffering: View
+    private lateinit var txtGesture: TextView
     private lateinit var episodesPanel: View
     private lateinit var btnPanelSeason: Button
     private lateinit var panelList: RecyclerView
     private lateinit var panelAdapter: SimpleAdapter<Int>
-    private lateinit var txtSleep: TextView
-    private lateinit var txtSeek: TextView
     private lateinit var btnSkip: Button
     private lateinit var countdownBox: View
     private lateinit var txtCountdown: TextView
     private lateinit var btnUnlock: Button
 
     private val handler = Handler(Looper.getMainLooper())
+    private var toast: Toast? = null
+    private var ended = false
     private var introHandled = false
     private var outroHandled = false
     private var finished = false
-    private var toast: Toast? = null
-
-    // Last known spot of the clip being played, so it can be saved after the player has moved on.
-    private var trackedIndex = -1
-    private var trackedPosition = 0L
-    private var trackedDuration = C.TIME_UNSET
-    private var lastSavedAt = 0L
-
     private var locked = false
     private var inPip = false
+    private var dragging = false
+    private var failures = 0
+    private var lastSavedAt = 0L
 
     /** Wall-clock time when the sleep timer pauses playback; 0 = off. */
     private var sleepAt = 0L
@@ -137,16 +138,33 @@ class PlayerActivity : ThemedActivity() {
     private var stopAfterIndex = -1
     private var countdownLeft = 0
     private var skipAction: (() -> Unit)? = null
-    private var controllerFuture: ListenableFuture<MediaController>? = null
-    private var dragging = false
     private var panelSeason = ""
+
+    private lateinit var session: MediaSession
+    private var notificationShown = false
+    private var receiverRegistered = false
+
+    private var drag = Drag.NONE
+    private var dragStartX = 0f
+    private var dragStartY = 0f
+    private var dragStartValue = 0f
+    private var dragStartPos = 0L
+    private var dragSeekTarget = 0L
+    private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
+
+    private val seekStepMs: Long get() = Settings.seekStepSec(this) * 1000L
 
     private val ticker = object : Runnable {
         override fun run() {
-            track()
-            checkSkip()
-            checkSleep()
-            updateProgressUi()
+            if (::engine.isInitialized && !finished) {
+                checkSkip()
+                checkSleep()
+                updateProgressUi()
+                if (engine.isPlaying && System.currentTimeMillis() - lastSavedAt > 5_000) {
+                    saveProgress()
+                    updateSession()
+                }
+            }
             handler.postDelayed(this, 250)
         }
     }
@@ -163,9 +181,9 @@ class PlayerActivity : ThemedActivity() {
         }
     }
 
-    private val hideSeek = Runnable { txtSeek.visibility = View.GONE }
-    private val hideUnlock = Runnable { btnUnlock.visibility = View.GONE }
     private val hideControls = Runnable { setControlsVisible(false) }
+    private val hideGesture = Runnable { txtGesture.visibility = View.GONE }
+    private val hideUnlock = Runnable { btnUnlock.visibility = View.GONE }
 
     private val lockedBack = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
@@ -176,69 +194,15 @@ class PlayerActivity : ThemedActivity() {
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    private val listener = object : Player.Listener {
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            val index = player.currentMediaItemIndex
-            if (trackedIndex in series.episodes.indices && trackedIndex != index) {
-                record(
-                    series.episodes[trackedIndex], trackedPosition, trackedDuration,
-                    ended = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO,
-                )
+    /** Buttons on the notification and lock screen. */
+    private val mediaReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (!::engine.isInitialized || finished) return
+            when (intent.action) {
+                PlaybackNotification.ACTION_PLAY_PAUSE -> togglePlay()
+                PlaybackNotification.ACTION_NEXT -> nextByUser()
+                PlaybackNotification.ACTION_PREV -> previousByUser()
             }
-            trackedIndex = index
-            trackedPosition = player.currentPosition
-            trackedDuration = C.TIME_UNSET
-            introHandled = false
-            outroHandled = false
-            cancelCountdown()
-            hideSkipButton()
-            // Jumping past the clip a stop was set for cancels that stop.
-            if (stopAfterIndex in 0 until index) stopAfterIndex = -1
-            // Moving to another clip (auto-next, next button, chosen from the list) resumes where it was left.
-            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) {
-                val resume = series.episodes[index].resumePosition
-                if (resume > 0 && abs(player.currentPosition - resume) > 2_000) player.seekTo(resume)
-            }
-            updatePauseAtEnd()
-            updateSleepLabel()
-            updateTitle()
-            saveProgress()
-            // In automatic mode, formats the main player is weak at continue in VLC.
-            if (series.engine == Engines.AUTO && Engines.needsVlc(series.episodes[index])) {
-                switchToBackup(Engines.VLC, remember = false, software = false)
-            }
-        }
-
-        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-            // The player stops itself at the end of a clip when we asked it to (auto-play off, countdown, sleep).
-            if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
-                onClipEnded(player.currentPosition, player.duration)
-            }
-        }
-
-        override fun onPlaybackStateChanged(playbackState: Int) {
-            buffering.visibility = if (playbackState == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
-            if (playbackState == Player.STATE_ENDED) {
-                record(currentEpisode(), player.currentPosition, player.duration, ended = true)
-                onSeriesFinished()
-            }
-        }
-
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            btnPlay.setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
-            if (isPlaying) scheduleHide() else setControlsVisible(true)
-        }
-
-        override fun onVideoSizeChanged(videoSize: VideoSize) {
-            applyOrientation()
-        }
-
-        override fun onPlayerError(error: PlaybackException) {
-            // Whatever player the series is set to, a clip the main player can't read
-            // (e.g. a file whose name says .mp4 but holds another format) goes to VLC.
-            // Try the phone's own player first: it handles what the phone's video app can play.
-            showToast("ตัวเล่นหลักเปิดไฟล์นี้ไม่ได้ · กำลังเปิดด้วยตัวเล่นของระบบ")
-            switchToBackup(Engines.SYSTEM, remember = false, software = false)
         }
     }
 
@@ -255,612 +219,357 @@ class PlayerActivity : ThemedActivity() {
         }
         series = s
 
-        playerView = findViewById(R.id.playerView)
+        bindViews()
+        setupControls()
+        setupGestures()
+        setupSession()
+        onBackPressedDispatcher.addCallback(this, lockedBack)
+        val filter = IntentFilter().apply {
+            addAction(PlaybackNotification.ACTION_PLAY_PAUSE)
+            addAction(PlaybackNotification.ACTION_NEXT)
+            addAction(PlaybackNotification.ACTION_PREV)
+        }
+        ContextCompat.registerReceiver(this, mediaReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        receiverRegistered = true
+
+        applyOrientation()
+        val start = intent.getIntExtra(EXTRA_INDEX, 0).coerceIn(0, s.episodes.size - 1)
+        openClip(start, intent.getLongExtra(EXTRA_POSITION, 0L))
+        setControlsVisible(true)
+        showFirstTimeHint()
+    }
+
+    private fun bindViews() {
+        videoFrame = findViewById(R.id.videoFrame)
+        exoView = findViewById(R.id.exoView)
+        vlcLayout = findViewById(R.id.vlcLayout)
+        systemFrame = findViewById(R.id.systemFrame)
+        systemSurface = findViewById(R.id.systemSurface)
         controls = findViewById(R.id.controls)
+        txtSeriesName = findViewById(R.id.txtSeriesName)
         txtTitle = findViewById(R.id.txtTitle)
+        txtSleep = findViewById(R.id.txtSleep)
+        btnEngine = findViewById(R.id.btnEngine)
+        btnRotate = findViewById(R.id.btnRotate)
         btnPlay = findViewById(R.id.btnPlay)
+        btnRew = findViewById(R.id.btnRew)
+        btnFwd = findViewById(R.id.btnFwd)
         seekBar = findViewById(R.id.seekBar)
         txtPosition = findViewById(R.id.txtPosition)
         txtRemaining = findViewById(R.id.txtRemaining)
         btnSpeed = findViewById(R.id.btnSpeed)
-        btnRotate = findViewById(R.id.btnRotate)
         buffering = findViewById(R.id.buffering)
+        txtGesture = findViewById(R.id.txtGesture)
         episodesPanel = findViewById(R.id.episodesPanel)
         btnPanelSeason = findViewById(R.id.btnPanelSeason)
         panelList = findViewById(R.id.rvPanel)
-        txtSleep = findViewById(R.id.txtSleep)
-        txtSeek = findViewById(R.id.txtSeek)
         btnSkip = findViewById(R.id.btnSkip)
         countdownBox = findViewById(R.id.countdownBox)
         txtCountdown = findViewById(R.id.txtCountdown)
         btnUnlock = findViewById(R.id.btnUnlock)
+    }
 
-        val audio = AudioAttributes.Builder()
-            .setUsage(C.USAGE_MEDIA)
-            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-            .build()
-        // FFmpeg takes over audio the phone can't decode; a failing video decoder falls back to another one.
-        val renderers = DefaultRenderersFactory(this)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-            .setEnableDecoderFallback(true)
-        // Seek in files without an index, and play TS recordings that lack IDR frames.
-        val extractors = DefaultExtractorsFactory()
-            .setConstantBitrateSeekingEnabled(true)
-            .setTsExtractorFlags(
-                DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or
-                    DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
-            )
-        player = ExoPlayer.Builder(this, renderers, DefaultMediaSourceFactory(this, extractors))
-            .setSeekBackIncrementMs(SEEK_STEP_MS)
-            .setSeekForwardIncrementMs(SEEK_STEP_MS)
-            .setAudioAttributes(audio, true)
-            .setHandleAudioBecomingNoisy(true)
-            .build()
-        playerView.player = player
-        playerView.useController = false
-        setupGestures()
+    private fun currentEpisode(): Episode = series.episodes[index]
 
-        val items = s.episodes.map {
-            MediaItem.Builder()
-                .setUri(Uri.parse(it.uri))
-                .setMediaId(it.uri)
-                .setMediaMetadata(MediaMetadata.Builder().setTitle(it.name).setArtist(s.name).build())
-                .build()
+    private fun hasNext() = index + 1 < series.episodes.size
+
+    // ---- Engines ----
+
+    private fun preferredEngine(i: Int): Int {
+        if (series.engine == Engines.AUTO) sessionEngine?.let { return it }
+        return Engines.preferred(this, series, series.episodes[i])
+    }
+
+    /** Swaps the engine and shows its picture view; the caller opens the clip afterwards. */
+    private fun useEngine(kind: Int) {
+        if (::engine.isInitialized) engine.release()
+        engineKind = kind
+        exoView.visibility = if (kind == Engines.MAIN) View.VISIBLE else View.GONE
+        vlcLayout.visibility = if (kind == Engines.VLC) View.VISIBLE else View.GONE
+        systemFrame.visibility = if (kind == Engines.SYSTEM) View.VISIBLE else View.GONE
+        engine = when (kind) {
+            Engines.SYSTEM -> SystemEngine(this, systemSurface, systemFrame, this)
+            Engines.VLC -> VlcEngine(this, vlcLayout, series.vlcHardware, this, handler)
+            else -> ExoEngine(this, exoView, series, this) { Store.put(this, series) }
         }
-        val startIndex = intent.getIntExtra(EXTRA_INDEX, 0).coerceIn(0, items.size - 1)
-        val startPos = intent.getLongExtra(EXTRA_POSITION, 0L).coerceAtLeast(0L)
-        player.addListener(listener)
-        player.setMediaItems(items, startIndex, startPos)
-        player.setPlaybackSpeed(s.speed)
-        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-            .setPreferredAudioLanguage(s.audioLang)
-            .setPreferredTextLanguage(s.textLang)
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, s.textOff)
-            .build()
-        player.prepare()
-        player.playWhenReady = true
-
-        applyResize()
-        applyOrientation()
-        updatePauseAtEnd()
-        onBackPressedDispatcher.addCallback(this, lockedBack)
-
-        setupControls()
-        findViewById<Button>(R.id.btnPlayNow).setOnClickListener { playNextNow() }
-        findViewById<Button>(R.id.btnCancelNext).setOnClickListener { cancelNext() }
-        btnSkip.setOnClickListener {
-            val action = skipAction
-            hideSkipButton()
-            action?.invoke()
-        }
-        btnUnlock.setOnClickListener {
-            showUnlockHint()
-            showToast("แตะค้างเพื่อปลดล็อก")
-        }
-        btnUnlock.setOnLongClickListener {
-            unlock()
-            true
-        }
-
-        if (Settings.backgroundAudio(this)) connectSession()
-        updateTitle()
-        setControlsVisible(true)
+        engine.setScale(series.resizeMode)
+        btnEngine.text = "🎬 ${Engines.shortName(kind)}"
     }
 
-    // ---- On-screen controls ----
-
-    private fun setupControls() {
-        fun tap(id: Int, action: () -> Unit) = findViewById<View>(id).setOnClickListener {
-            action()
-            scheduleHide()
-        }
-        tap(R.id.btnBack) { finish() }
-        tap(R.id.btnMore) { showMenu() }
-        tap(R.id.btnResize) { cycleResize() }
-        tap(R.id.btnRotate) { toggleRotation() }
-        btnRotate.setOnLongClickListener {
-            series.orientation = 0
-            applyOrientation()
-            updateRotateLabel()
-            saveProgress()
-            showToast("หมุนจออัตโนมัติตามคลิป")
-            true
-        }
-        tap(R.id.btnPlay) { if (player.isPlaying) player.pause() else player.play() }
-        tap(R.id.btnRew) { seekBy(-SEEK_STEP_MS) }
-        tap(R.id.btnFwd) { seekBy(SEEK_STEP_MS) }
-        tap(R.id.btnSpeed) { chooseSpeed() }
-        tap(R.id.btnLock) { lock() }
-        tap(R.id.btnEpisodes) { showEpisodesPanel() }
-        tap(R.id.btnTracks) { chooseTracks() }
-        tap(R.id.btnNextEp) { if (player.hasNextMediaItem()) playNextNow() else showToast("นี่คือตอนสุดท้ายแล้ว") }
-        findViewById<View>(R.id.btnPanelClose).setOnClickListener { hideEpisodesPanel() }
-        btnPanelSeason.setOnClickListener { choosePanelSeason() }
-
-        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (fromUser) txtPosition.text = TimeText.format(progress)
-            }
-
-            override fun onStartTrackingTouch(bar: SeekBar) {
-                dragging = true
-                handler.removeCallbacks(hideControls)
-            }
-
-            override fun onStopTrackingTouch(bar: SeekBar) {
-                dragging = false
-                player.seekTo(bar.progress * 1000L)
-                scheduleHide()
-            }
-        })
-
-        panelAdapter = SimpleAdapter(R.layout.item_episode_card) { v, i -> bindPanelCard(v, i) }
-        panelList.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
-        panelList.adapter = panelAdapter
-        updateSpeedLabel()
-        updateRotateLabel()
+    /** Starts clip [i] at [position] on its preferred engine. */
+    private fun openClip(i: Int, position: Long) {
+        index = i
+        triedEngines.clear()
+        if (stopAfterIndex in 0 until i) stopAfterIndex = -1
+        startOn(preferredEngine(i), position)
     }
 
-    private fun setControlsVisible(visible: Boolean) {
-        if (!::controls.isInitialized) return
-        handler.removeCallbacks(hideControls)
-        if (visible && (locked || inPip || episodesPanel.visibility == View.VISIBLE)) return
-        controls.visibility = if (visible) View.VISIBLE else View.GONE
-        if (visible) {
-            updateProgressUi()
-            scheduleHide()
-        }
-    }
-
-    /** Fade the controls after a few seconds, but only while the video is playing. */
-    private fun scheduleHide() {
-        handler.removeCallbacks(hideControls)
-        if (::player.isInitialized && player.isPlaying && !dragging) handler.postDelayed(hideControls, CONTROLS_TIMEOUT_MS)
-    }
-
-    private fun updateProgressUi() {
-        if (!::player.isInitialized || dragging || controls.visibility != View.VISIBLE) return
-        val pos = player.currentPosition
-        val dur = player.duration
-        txtPosition.text = TimeText.ms(pos)
-        if (dur != C.TIME_UNSET && dur > 0) {
-            seekBar.max = (dur / 1000).toInt()
-            seekBar.progress = (pos / 1000).toInt()
-            seekBar.secondaryProgress = (player.bufferedPosition / 1000).toInt()
-            txtRemaining.text = "-${TimeText.ms(dur - pos)}"
-        } else {
-            txtRemaining.text = ""
-        }
-    }
-
-    private fun toggleRotation() {
-        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        series.orientation = if (landscape) 2 else 1
-        applyOrientation()
-        updateRotateLabel()
-        saveProgress()
-        showToast(if (landscape) "ล็อกแนวตั้ง · แตะค้างเพื่อหมุนอัตโนมัติ" else "ล็อกแนวนอน · แตะค้างเพื่อหมุนอัตโนมัติ")
-    }
-
-    private fun updateRotateLabel() {
-        btnRotate.text = when (series.orientation) {
-            1 -> "▭ แนวนอน"
-            2 -> "▯ แนวตั้ง"
-            3 -> "⟳ ตามเครื่อง"
-            else -> "⟳ หมุน"
-        }
-    }
-
-    private fun speedText(x: Float) = if (x == 1f) "1x" else "${x}x".replace(".0x", "x")
-
-    private fun updateSpeedLabel() {
-        btnSpeed.text = "⏲\nความเร็ว ${speedText(series.speed)}"
-    }
-
-    private fun chooseSpeed() {
-        Dialogs.menu(this, "ความเร็วในการเล่น", SPEEDS.map { x ->
-            val label = speedText(x) + if (x == 1f) " (ปกติ)" else ""
-            (if (x == series.speed) "✓ $label" else label) to {
-                series.speed = x
-                player.setPlaybackSpeed(x)
-                updateSpeedLabel()
-                saveProgress()
-            }
-        })
-    }
-
-    // ---- Audio and subtitle tracks ----
-
-    private fun trackName(f: Format, fallback: String): String {
-        val lang = f.language?.takeIf { it != C.LANGUAGE_UNDETERMINED }?.let {
-            Locale.forLanguageTag(it).getDisplayLanguage(Locale.forLanguageTag("th")).ifEmpty { it }
-        }
-        return listOfNotNull(f.label, lang).distinct().joinToString(" · ").ifEmpty { fallback }
-    }
-
-    private fun chooseTracks() {
-        val items = mutableListOf<Pair<CharSequence, () -> Unit>>()
-        val groups = player.currentTracks.groups
-        var n = 0
-        groups.filter { it.type == C.TRACK_TYPE_AUDIO }.forEach { g ->
-            for (i in 0 until g.length) {
-                if (!g.isTrackSupported(i)) continue
-                n++
-                val name = trackName(g.getTrackFormat(i), "เสียง $n")
-                items.add("${if (g.isTrackSelected(i)) "✓" else "   "} 🔊 $name" to { selectTrack(g, i) })
-            }
-        }
-        val texts = groups.filter { it.type == C.TRACK_TYPE_TEXT }
-        if (texts.isNotEmpty()) {
-            val off = texts.none { it.isSelected }
-            items.add("${if (off) "✓" else "   "} 💬 ปิดซับไตเติล" to {
-                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                    .build()
-                series.textOff = true
-                saveProgress()
-            })
-            n = 0
-            texts.forEach { g ->
-                for (i in 0 until g.length) {
-                    if (!g.isTrackSupported(i)) continue
-                    n++
-                    val name = trackName(g.getTrackFormat(i), "ซับไตเติล $n")
-                    items.add("${if (g.isTrackSelected(i)) "✓" else "   "} 💬 $name" to { selectTrack(g, i) })
-                }
-            }
-        }
-        if (items.isEmpty()) {
-            showToast("ไฟล์นี้ไม่มีเสียงหรือซับไตเติลให้เลือก")
-            return
-        }
-        Dialogs.menu(this, "เสียงและซับไตเติล", items)
-    }
-
-    /** Picks a track and remembers its language, so later episodes use the same one. */
-    private fun selectTrack(g: Tracks.Group, index: Int) {
-        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-            .setTrackTypeDisabled(g.type, false)
-            .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, index))
-            .build()
-        val lang = g.getTrackFormat(index).language
-        if (g.type == C.TRACK_TYPE_AUDIO) {
-            series.audioLang = lang
-        } else {
-            series.textLang = lang
-            series.textOff = false
-        }
-        saveProgress()
-    }
-
-    // ---- Episode picker ----
-
-    private fun showEpisodesPanel() {
-        setControlsVisible(false)
-        panelSeason = currentEpisode().season
-        renderPanel()
-        episodesPanel.visibility = View.VISIBLE
-    }
-
-    private fun hideEpisodesPanel() {
-        episodesPanel.visibility = View.GONE
-        setControlsVisible(true)
-    }
-
-    private fun renderPanel() {
-        val seasons = series.seasons()
-        if (seasons.size > 1) {
-            btnPanelSeason.visibility = View.VISIBLE
-            btnPanelSeason.text = "${TimeText.seasonLabel(panelSeason)} ▾"
-        } else {
-            btnPanelSeason.visibility = View.GONE
-        }
-        val shown = series.episodes.indices.filter { seasons.size <= 1 || series.episodes[it].season == panelSeason }
-        panelAdapter.items = shown
-        val at = shown.indexOf(player.currentMediaItemIndex)
-        if (at >= 0) (panelList.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(at, 48)
-    }
-
-    private fun choosePanelSeason() {
-        Dialogs.menu(this, "เลือกภาค", series.seasons().map { s ->
-            "${if (s == panelSeason) "✓ " else ""}${TimeText.seasonLabel(s)}" to {
-                panelSeason = s
-                renderPanel()
-            }
-        })
-    }
-
-    private fun bindPanelCard(v: View, index: Int) {
-        val ep = series.episodes[index]
-        val current = index == player.currentMediaItemIndex
-        Thumbs.load(this, ep.uri, v.findViewById<ImageView>(R.id.imgThumb))
-        v.findViewById<MaterialCardView>(R.id.card).strokeWidth =
-            if (current) (3 * resources.displayMetrics.density).toInt() else 0
-        v.findViewById<TextView>(R.id.txtTitle).text = "${index + 1}. ${ep.shortName}"
-        v.findViewById<TextView>(R.id.txtSubtitle).text = if (current) "▶ กำลังเล่น" else TimeText.progress(ep)
-        v.findViewById<ProgressBar>(R.id.progress).showPercent(TimeText.percent(ep))
-        v.setOnClickListener {
-            episodesPanel.visibility = View.GONE
-            if (!current) player.seekTo(index, ep.resumePosition)
-            player.play()
-        }
-    }
-
-    private fun currentEpisode(): Episode = series.episodes[player.currentMediaItemIndex]
-
-    // ---- Gestures and lock ----
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun setupGestures() {
-        val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDown(e: MotionEvent): Boolean = true
-
-            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                when {
-                    locked -> showUnlockHint()
-                    inPip -> Unit
-                    episodesPanel.visibility == View.VISIBLE -> hideEpisodesPanel()
-                    controls.visibility == View.VISIBLE -> setControlsVisible(false)
-                    else -> setControlsVisible(true)
-                }
-                return true
-            }
-
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                if (locked || inPip) return true
-                seekBy(if (e.x > playerView.width / 2f) SEEK_STEP_MS else -SEEK_STEP_MS)
-                return true
-            }
-        })
-        playerView.setOnTouchListener { _, event ->
-            detector.onTouchEvent(event)
-            true
-        }
-    }
-
-    private fun seekBy(delta: Long) {
-        val dur = player.duration
-        var target = player.currentPosition + delta
-        if (dur != C.TIME_UNSET) target = target.coerceAtMost(dur - 500)
-        target = target.coerceAtLeast(0L)
-        player.seekTo(target)
-        val arrow = if (delta > 0) "⏩ +10 วินาที" else "⏪ −10 วินาที"
-        txtSeek.text = "$arrow\n${TimeText.ms(target)}"
-        txtSeek.visibility = View.VISIBLE
-        handler.removeCallbacks(hideSeek)
-        handler.postDelayed(hideSeek, 700)
-    }
-
-    private fun lock() {
-        setControlsVisible(false)
-        locked = true
-        lockedBack.isEnabled = true
-        episodesPanel.visibility = View.GONE
+    /** Plays the current clip on engine [kind]; [fresh] rebuilds it even if it's already in use. */
+    private fun startOn(kind: Int, position: Long, fresh: Boolean = false) {
+        triedEngines.add(kind)
+        if (fresh || !::engine.isInitialized || engineKind != kind) useEngine(kind)
+        ended = false
+        introHandled = false
+        outroHandled = false
+        cancelCountdown()
         hideSkipButton()
-        showUnlockHint()
-        showToast("ล็อกหน้าจอแล้ว · แตะค้างที่ 🔓 เพื่อปลดล็อก")
-    }
-
-    private fun unlock() {
-        locked = false
-        lockedBack.isEnabled = false
-        handler.removeCallbacks(hideUnlock)
-        btnUnlock.visibility = View.GONE
-        setControlsVisible(true)
-        showToast("ปลดล็อกแล้ว")
-    }
-
-    private fun showUnlockHint() {
-        if (inPip) return
-        btnUnlock.visibility = View.VISIBLE
-        handler.removeCallbacks(hideUnlock)
-        handler.postDelayed(hideUnlock, 3_000)
-    }
-
-    // ---- Picture size and rotation ----
-
-    private fun applyResize() {
-        playerView.resizeMode = when (series.resizeMode) {
-            1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-            2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-        }
-    }
-
-    private fun setResize(mode: Int) {
-        series.resizeMode = mode
-        applyResize()
-        saveProgress()
-        showToast("ขนาดภาพ: ${RESIZE_NAMES[mode]}")
-    }
-
-    private fun cycleResize() = setResize((series.resizeMode + 1) % RESIZE_NAMES.size)
-
-    private fun applyOrientation() {
-        if (!::player.isInitialized || inPip) return
-        val want = when (series.orientation) {
-            1 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            2 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-            3 -> ActivityInfo.SCREEN_ORIENTATION_FULL_USER
-            else -> {
-                val v = player.videoSize
-                if (v.width > 0 && v.height > v.width * v.pixelWidthHeightRatio) {
-                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-                } else {
-                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                }
-            }
-        }
-        if (requestedOrientation != want) requestedOrientation = want
-    }
-
-    // ---- Picture-in-picture and background audio ----
-
-    private fun enterPip() {
-        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
-            showToast("เครื่องนี้ไม่รองรับจอลอย")
+        series.lastIndex = index
+        series.lastWatchedAt = System.currentTimeMillis()
+        Store.put(this, series)
+        updateTitle()
+        if (episodesPanel.visibility == View.VISIBLE) renderPanel()
+        if (!engine.open(Uri.parse(currentEpisode().uri), position.coerceAtLeast(0L))) {
+            recoverFromError()
             return
         }
-        val v = player.videoSize
-        val ratio = if (v.width > 0 && v.height > 0) {
-            (v.width * v.pixelWidthHeightRatio / v.height).coerceIn(0.42f, 2.38f)
+        engine.setSpeed(series.speed)
+        updateSession()
+    }
+
+    /** The current engine gave up on this clip: try the next engine, then the next clip. */
+    private fun recoverFromError() {
+        val pos = engine.time
+        val next = Engines.ORDER.firstOrNull { it !in triedEngines }
+        if (next != null) {
+            showToast("${Engines.shortName(engineKind)}เปิดไฟล์นี้ไม่ได้ · กำลังลองด้วย${Engines.shortName(next)}")
+            startOn(next, pos)
         } else {
-            16f / 9f
-        }
-        val params = PictureInPictureParams.Builder()
-            .setAspectRatio(Rational((ratio * 1000).toInt(), 1000))
-            .build()
-        try {
-            enterPictureInPictureMode(params)
-        } catch (e: IllegalStateException) {
-            showToast("เปิดจอลอยไม่ได้")
+            showToast("เปิดไฟล์นี้ไม่ได้ทุกตัวเล่น (ไฟล์อาจเสีย): ${currentEpisode().shortName}")
+            failures++
+            if (failures < 3 && hasNext()) openClip(index + 1, series.episodes[index + 1].resumePosition) else finish()
         }
     }
 
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        if (::player.isInitialized && Settings.autoPip(this) && player.isPlaying && !locked) enterPip()
+    /** Lets the user pick the engine for this series, e.g. when the picture breaks up. */
+    private fun chooseEngine() {
+        fun pick(kind: Int) {
+            val pos = engine.time
+            saveProgress()
+            series.engine = kind
+            if (kind == Engines.VLC) series.vlcHardware = false
+            sessionEngine = null
+            Store.put(this, series)
+            triedEngines.clear()
+            val target = if (kind == Engines.AUTO) Engines.preferred(this, series, currentEpisode()) else kind
+            startOn(target, pos, fresh = true)
+            showToast("เปลี่ยนเป็น${Engines.shortName(target)}แล้ว · จำไว้สำหรับเรื่องนี้")
+        }
+        fun mark(kind: Int) = if (series.engine == kind) "✓  " else ""
+        Dialogs.menu(
+            this, "ภาพแตกหรือเล่นไม่ได้? ลองเปลี่ยนตัวเล่น", listOf(
+                "${mark(Engines.SYSTEM)}📱 ตัวเล่นของระบบ · แบบเดียวกับแอปวิดีโอในเครื่อง" to { pick(Engines.SYSTEM) },
+                "${mark(Engines.VLC)}🧰 VLC · ถอดรหัสด้วยซอฟต์แวร์ เปิดได้แทบทุกไฟล์" to { pick(Engines.VLC) },
+                "${mark(Engines.MAIN)}⭐ ตัวเล่นหลัก · เร็ว ซับไตเติลครบ" to { pick(Engines.MAIN) },
+                "${mark(Engines.AUTO)}✨ อัตโนมัติ · ตามค่าในหน้าตั้งค่า" to { pick(Engines.AUTO) },
+            )
+        )
     }
 
-    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
-        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        inPip = isInPictureInPictureMode
-        if (inPip) {
-            controls.visibility = View.GONE
-            episodesPanel.visibility = View.GONE
-            hideSkipButton()
-            countdownBox.visibility = View.GONE
-            btnUnlock.visibility = View.GONE
-        } else {
-            // Closing the floating window leaves the activity stopped; treat that as closing the player.
-            if (lifecycle.currentState == Lifecycle.State.CREATED) {
-                finish()
-                return
+    // ---- Engine events ----
+
+    override fun onEnginePlaying() {
+        failures = 0
+        if (series.engine == Engines.AUTO && triedEngines.size > 1) sessionEngine = engineKind
+        buffering.visibility = View.GONE
+        btnPlay.setImageResource(R.drawable.ic_pause)
+        scheduleHide()
+        startBackgroundNotification()
+        updateSession()
+    }
+
+    override fun onEnginePaused() {
+        btnPlay.setImageResource(R.drawable.ic_play)
+        setControlsVisible(true)
+        updateSession()
+    }
+
+    override fun onEngineBuffering(busy: Boolean) {
+        buffering.visibility = if (busy) View.VISIBLE else View.GONE
+    }
+
+    override fun onEngineVideoSize() {
+        applyOrientation()
+        engine.setScale(series.resizeMode)
+    }
+
+    override fun onEngineEnded() {
+        // Engines report from inside their own callbacks; act once they've returned.
+        handler.post {
+            if (finished || ended) return@post
+            ended = true
+            btnPlay.setImageResource(R.drawable.ic_play)
+            val d = currentEpisode().duration.takeIf { it > 0 } ?: engine.length
+            handleClipEnd(d, d, natural = true)
+            updateSession()
+        }
+    }
+
+    override fun onEngineError() {
+        handler.post { if (!finished) recoverFromError() }
+    }
+
+    // ---- End of a clip: auto-play, countdown, stop ----
+
+    private fun stopsAfter(i: Int) = if (stopAfterIndex >= 0) i == stopAfterIndex else !series.autoPlay
+
+    /** The clip is over: it reached its end ([natural]) or its outro started. */
+    private fun handleClipEnd(position: Long, duration: Long, natural: Boolean) {
+        series.recordProgress(currentEpisode(), position, duration, ended = true)
+        series.lastWatchedAt = System.currentTimeMillis()
+        Store.put(this, series)
+        when {
+            stopsAfter(index) -> {
+                val planned = stopAfterIndex >= 0
+                if (planned) stopAfterIndex = -1
+                if (!natural) engine.pause()
+                setControlsVisible(true)
+                updateSleepLabel()
+                showToast(
+                    when {
+                        planned -> "ดูจบตามที่ตั้งไว้แล้ว ราตรีสวัสดิ์ 💤"
+                        hasNext() -> "จบตอนนี้แล้ว · กด ⏭ เพื่อดูตอนต่อไป"
+                        else -> "จบตอนสุดท้ายแล้ว 🎉"
+                    }
+                )
             }
-            if (countdownLeft > 0) countdownBox.visibility = View.VISIBLE
-            applyOrientation()
-        }
-    }
-
-    private fun connectSession() {
-        if (controllerFuture != null) return
-        PlayerHolder.player = player
-        val token = SessionToken(this, ComponentName(this, PlaybackService::class.java))
-        controllerFuture = MediaController.Builder(this, token).buildAsync()
-    }
-
-    private fun toggleBackgroundAudio() {
-        val on = !Settings.backgroundAudio(this)
-        Settings.setBackgroundAudio(this, on)
-        if (on) {
-            if (Build.VERSION.SDK_INT >= 33 &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-            ) {
-                askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            !hasNext() -> {
+                if (!natural) engine.pause()
+                onSeriesFinished()
             }
-            connectSession()
-            showToast("ปิดจอแล้วเสียงจะเล่นต่อ · ควบคุมได้จากแถบแจ้งเตือน")
-        } else {
-            showToast("ปิดจอแล้วจะหยุดเล่น")
+            series.countdown -> startCountdown()
+            else -> playNextNow()
         }
     }
 
-    // ---- Menus ----
+    private fun startCountdown() {
+        if (countdownLeft > 0) return
+        hideSkipButton()
+        countdownLeft = COUNTDOWN_SECONDS
+        updateCountdownText()
+        countdownBox.visibility = if (inPip) View.GONE else View.VISIBLE
+        handler.removeCallbacks(countdownTick)
+        handler.postDelayed(countdownTick, 1_000)
+    }
 
-    private fun check(on: Boolean) = if (on) "✅" else "⬜"
+    private fun updateCountdownText() {
+        val next = series.episodes.getOrNull(index + 1)?.shortName ?: ""
+        txtCountdown.text = "ตอนต่อไปใน $countdownLeft วินาที\n$next"
+    }
 
-    private fun showMenu() {
-        val pos = player.currentPosition
-        val sec = (pos / 1000).toInt()
-        val now = TimeText.format(sec)
+    private fun cancelCountdown() {
+        countdownLeft = 0
+        handler.removeCallbacks(countdownTick)
+        if (::countdownBox.isInitialized) countdownBox.visibility = View.GONE
+    }
+
+    private fun playNextNow() {
+        cancelCountdown()
+        if (hasNext()) openClip(index + 1, series.episodes[index + 1].resumePosition)
+    }
+
+    /** "Cancel" on the countdown: stay on this clip and stop when it ends. */
+    private fun cancelNext() {
+        cancelCountdown()
+        stopAfterIndex = index
+        updateSleepLabel()
+        showToast("ยกเลิกแล้ว · จะหยุดเมื่อจบตอนนี้")
+    }
+
+    private fun togglePlay() {
+        when {
+            ended -> if (hasNext()) playNextNow() else openClip(index, 0L)
+            engine.isPlaying -> engine.pause()
+            else -> engine.play()
+        }
+    }
+
+    private fun nextByUser() {
+        if (!hasNext()) {
+            showToast("นี่คือตอนสุดท้ายแล้ว")
+            return
+        }
+        saveProgress()
+        openClip(index + 1, series.episodes[index + 1].resumePosition)
+    }
+
+    private fun previousByUser() {
+        if (engine.time > 5_000 || index == 0) {
+            engine.seek(0L)
+            return
+        }
+        saveProgress()
+        openClip(index - 1, series.episodes[index - 1].resumePosition)
+    }
+
+    private fun onSeriesFinished() {
+        if (finished) return
+        finished = true
+        series.lastWatchedAt = System.currentTimeMillis()
+        Store.put(this, series)
+        showToast("ดูครบทุกตอนแล้ว 🎉")
+        finish()
+    }
+
+    // ---- Skip times ----
+
+    private fun checkSkip() {
+        if (ended || !engine.isPlaying) return
         val ep = currentEpisode()
-        val introNote = if (series.introEndOf(ep) > series.introStartOf(ep)) {
-            " (${TimeText.format(series.introStartOf(ep))}–${TimeText.format(series.introEndOf(ep))})"
-        } else {
-            " (ยังไม่ได้ตั้ง)"
+        val pos = engine.time
+        val dur = engine.length
+        if (dur > 0) ep.duration = dur
+        val introStart = series.introStartOf(ep) * 1000L
+        val introEnd = series.introEndOf(ep) * 1000L
+        val outro = series.outroOf(ep) * 1000L
+        val hasIntro = series.skipIntro && introEnd > introStart
+        val hasOutro = series.skipOutro && outro > 0 && dur > outro
+        val outroStart = if (hasOutro) dur - outro else Long.MAX_VALUE
+
+        if (series.skipManual) {
+            when {
+                hasIntro && pos >= introStart && pos < introEnd - 1_000 ->
+                    showSkipButton("ข้ามเพลงเปิด ⏭") { engine.seek(introEnd) }
+                hasOutro && pos >= outroStart && countdownLeft == 0 ->
+                    showSkipButton(if (hasNext()) "ตอนต่อไป ⏭" else "จบเรื่อง ⏹") { skipToNextByUser() }
+                else -> hideSkipButton()
+            }
+            return
         }
-        val outroNote = if (series.outroOf(ep) > 0) " (${TimeText.format(series.outroOf(ep))} สุดท้าย)" else " (ยังไม่ได้ตั้ง)"
-        val sleepNote = when {
-            sleepAt > 0 -> " (เหลือ ${TimeText.ms(sleepAt - System.currentTimeMillis())})"
-            stopAfterIndex >= 0 -> " (หยุดหลังตอนที่ ${stopAfterIndex + 1})"
-            else -> ""
+        if (hasIntro && !introHandled) {
+            if (pos >= introEnd) {
+                introHandled = true
+            } else if (pos >= introStart) {
+                introHandled = true
+                engine.seek(introEnd)
+                showToast("ข้ามเพลงเปิดแล้ว")
+            }
         }
-        Dialogs.menu(
-            this, "เมนู · ตอนที่ ${player.currentMediaItemIndex + 1}", listOf(
-                "⏾ ตั้งเวลาปิด$sleepNote" to { showSleepMenu() },
-                "1️⃣ ดูอีกตอนเดียวแล้วหยุด" to { oneMoreEpisode() },
-                "🗗 ดูแบบจอลอย" to { enterPip() },
-                "🛠 ภาพแตก / เล่นไม่ได้? เปลี่ยนตัวเล่น" to { chooseBackup() },
-                "${check(series.skipIntro)} ข้ามเพลงเปิด$introNote" to {
-                    series.skipIntro = !series.skipIntro
-                    saveProgress()
-                    showToast(if (series.skipIntro) "เปิดการข้ามเพลงเปิด" else "ปิดการข้ามเพลงเปิด")
-                },
-                "${check(series.skipOutro)} ข้ามเพลงปิด$outroNote" to {
-                    series.skipOutro = !series.skipOutro
-                    saveProgress()
-                    showToast(if (series.skipOutro) "เปิดการข้ามเพลงปิด" else "ปิดการข้ามเพลงปิด")
-                },
-                "⏱ ตอนนี้ ($now) = จุดเริ่มเพลงเปิด" to { chooseScope { only -> setIntroStart(sec, only) } },
-                "⏱ ตอนนี้ ($now) = จุดจบเพลงเปิด" to { chooseScope { only -> setIntroEnd(sec, only) } },
-                "⏱ ตอนนี้ ($now) = จุดเริ่มเพลงปิด" to { chooseScope { only -> setOutroFrom(pos, only) } },
-                "⚙ พิมพ์เวลาข้ามเพลงเอง" to { chooseScope { only -> editSkipTimes(only) } },
-                "🎛 ตั้งค่าการเล่น" to { showPlaybackSettings() },
-            )
-        )
+        if (hasOutro && !outroHandled && pos >= outroStart) {
+            outroHandled = true
+            handleClipEnd(pos, dur, natural = false)
+        }
     }
 
-    private fun showPlaybackSettings() {
-        val orientation = ORIENTATION_NAMES[series.orientation.coerceIn(0, ORIENTATION_NAMES.size - 1)]
-        val resize = RESIZE_NAMES[series.resizeMode.coerceIn(0, RESIZE_NAMES.size - 1)]
-        Dialogs.menu(
-            this, "ตั้งค่าการเล่น (${series.name})", listOf(
-                "${check(series.autoPlay)} เล่นตอนต่อไปอัตโนมัติ" to {
-                    series.autoPlay = !series.autoPlay
-                    updatePauseAtEnd()
-                    saveProgress()
-                    showToast(if (series.autoPlay) "จบตอนแล้วไปตอนต่อไปเลย" else "จบตอนแล้วจะหยุดรอ")
-                },
-                "${check(series.countdown)} นับถอยหลัง $COUNTDOWN_SECONDS วินาทีก่อนไปตอนต่อไป" to {
-                    series.countdown = !series.countdown
-                    updatePauseAtEnd()
-                    saveProgress()
-                    showToast(if (series.countdown) "เปิดการนับถอยหลัง" else "ปิดการนับถอยหลัง")
-                },
-                "${check(series.skipManual)} ข้ามเพลงแบบกดปุ่มเอง (แบบ Netflix)" to {
-                    series.skipManual = !series.skipManual
-                    hideSkipButton()
-                    // Don't jump right away if the switch to auto happens mid-intro or mid-outro.
-                    introHandled = true
-                    outroHandled = true
-                    saveProgress()
-                    showToast(if (series.skipManual) "จะแสดงปุ่มให้กดข้ามเอง" else "จะข้ามให้อัตโนมัติ")
-                },
-                "📱 การหมุนจอ: $orientation" to {
-                    Dialogs.menu(this, "การหมุนจอ", ORIENTATION_NAMES.mapIndexed { i, name ->
-                        "${if (i == series.orientation) "✓ " else ""}$name" to {
-                            series.orientation = i
-                            applyOrientation()
-                            updateRotateLabel()
-                            saveProgress()
-                        }
-                    })
-                },
-                "⏲ ความเร็ว: ${speedText(series.speed)}" to { chooseSpeed() },
-                "💬 เสียงและซับไตเติล" to { chooseTracks() },
-                "🔲 ขนาดภาพ: $resize" to {
-                    Dialogs.menu(this, "ขนาดภาพ", RESIZE_NAMES.mapIndexed { i, name ->
-                        "${if (i == series.resizeMode) "✓ " else ""}$name" to { setResize(i) }
-                    })
-                },
-                "${check(Settings.backgroundAudio(this))} เล่นเสียงต่อเมื่อปิดจอ (ทุกเรื่อง)" to { toggleBackgroundAudio() },
-                "${check(Settings.autoPip(this))} เข้าจอลอยอัตโนมัติเมื่อกดออก (ทุกเรื่อง)" to {
-                    val on = !Settings.autoPip(this)
-                    Settings.setAutoPip(this, on)
-                    showToast(if (on) "กดปุ่มโฮมระหว่างดูจะเป็นจอลอย" else "ปิดจอลอยอัตโนมัติ")
-                },
-            )
-        )
+    private fun skipToNextByUser() {
+        series.recordProgress(currentEpisode(), engine.time, engine.length, ended = true)
+        if (hasNext()) {
+            playNextNow()
+        } else {
+            engine.pause()
+            onSeriesFinished()
+        }
+    }
+
+    private fun showSkipButton(label: String, action: () -> Unit) {
+        if (locked || inPip || countdownLeft > 0) return hideSkipButton()
+        skipAction = action
+        if (btnSkip.text.toString() != label) btnSkip.text = label
+        btnSkip.visibility = View.VISIBLE
+    }
+
+    private fun hideSkipButton() {
+        skipAction = null
+        if (::btnSkip.isInitialized) btnSkip.visibility = View.GONE
     }
 
     private fun chooseScope(onChosen: (Boolean) -> Unit) {
@@ -871,39 +580,6 @@ class PlayerActivity : ThemedActivity() {
             )
         )
     }
-
-    private fun chooseBackup() {
-        Dialogs.menu(
-            this, "เปลี่ยนตัวเล่นของเรื่องนี้", listOf(
-                "📱 ตัวเล่นของระบบ (แนะนำ · แบบเดียวกับแอปวิดีโอในเครื่อง)" to {
-                    switchToBackup(Engines.SYSTEM, remember = true, software = false)
-                },
-                "🧰 VLC ถอดรหัสด้วยซอฟต์แวร์ (เปิดได้แทบทุกไฟล์)" to {
-                    switchToBackup(Engines.VLC, remember = true, software = true)
-                },
-            )
-        )
-    }
-
-    /**
-     * Continues this clip in a backup engine. [remember] makes it the series' player from now on;
-     * [software] turns off VLC's hardware decoding, which fixes blocky or smeared pictures.
-     */
-    private fun switchToBackup(kind: Int, remember: Boolean, software: Boolean) {
-        if (finished) return
-        val index = player.currentMediaItemIndex
-        val position = player.currentPosition
-        saveProgress()
-        if (remember) series.engine = kind
-        if (software) series.vlcHardware = false
-        Store.put(this, series)
-        finished = true
-        player.pause()
-        BackupPlayerActivity.start(this, series.id, index, position, kind)
-        finish()
-    }
-
-    // ---- Skip times ----
 
     private fun setIntroStart(sec: Int, thisOnly: Boolean) {
         val ep = currentEpisode()
@@ -941,8 +617,8 @@ class PlayerActivity : ThemedActivity() {
     }
 
     private fun setOutroFrom(pos: Long, thisOnly: Boolean) {
-        val dur = player.duration
-        if (dur == C.TIME_UNSET) return
+        val dur = engine.length
+        if (dur <= 0) return
         val remaining = ((dur - pos) / 1000).toInt()
         if (remaining <= 0) return
         if (thisOnly) currentEpisode().outroLength = remaining else series.outroLength = remaining
@@ -989,155 +665,455 @@ class PlayerActivity : ThemedActivity() {
         }
     }
 
-    private fun checkSkip() {
-        if (!::player.isInitialized || finished || player.playbackState != Player.STATE_READY) return
-        val ep = series.episodes.getOrNull(player.currentMediaItemIndex) ?: return
-        val pos = player.currentPosition
-        val dur = player.duration
+    // ---- On-screen controls ----
 
-        val introStart = series.introStartOf(ep) * 1000L
-        val introEnd = series.introEndOf(ep) * 1000L
-        val outro = series.outroOf(ep) * 1000L
-        val hasIntro = series.skipIntro && introEnd > introStart
-        val hasOutro = series.skipOutro && outro > 0 && dur != C.TIME_UNSET && dur > outro
-        val outroStart = if (hasOutro) dur - outro else Long.MAX_VALUE
-
-        if (series.skipManual) {
-            when {
-                hasIntro && pos >= introStart && pos < introEnd - 1_000 ->
-                    showSkipButton("ข้ามเพลงเปิด ⏭") { player.seekTo(introEnd) }
-                hasOutro && pos >= outroStart && countdownLeft == 0 ->
-                    showSkipButton(if (player.hasNextMediaItem()) "ตอนต่อไป ⏭" else "จบเรื่อง ⏹") { skipToNextByUser() }
-                else -> hideSkipButton()
-            }
-            return
+    private fun setupControls() {
+        fun tap(id: Int, action: () -> Unit) = findViewById<View>(id).setOnClickListener {
+            action()
+            scheduleHide()
         }
-
-        if (hasIntro && !introHandled) {
-            if (pos >= introEnd) {
-                introHandled = true
-            } else if (pos >= introStart) {
-                introHandled = true
-                player.seekTo(introEnd)
-                showToast("ข้ามเพลงเปิดแล้ว")
-            }
+        tap(R.id.btnBack) { finish() }
+        tap(R.id.btnMore) { showMenu() }
+        tap(R.id.btnEngine) { chooseEngine() }
+        tap(R.id.btnResize) { setResize((series.resizeMode + 1) % RESIZE_NAMES.size) }
+        tap(R.id.btnRotate) { toggleRotation() }
+        btnRotate.setOnLongClickListener {
+            series.orientation = 0
+            applyOrientation()
+            updateRotateLabel()
+            saveProgress()
+            showToast("หมุนจออัตโนมัติตามคลิป")
+            true
         }
-        if (hasOutro && !outroHandled && pos >= outroStart) {
-            outroHandled = true
-            onClipEnded(pos, dur)
-        }
-    }
-
-    private fun showSkipButton(label: String, action: () -> Unit) {
-        if (locked || inPip || countdownLeft > 0) {
+        tap(R.id.btnPlay) { togglePlay() }
+        tap(R.id.btnRew) { seekBy(-seekStepMs) }
+        tap(R.id.btnFwd) { seekBy(seekStepMs) }
+        tap(R.id.btnSpeed) { chooseSpeed() }
+        tap(R.id.btnLock) { lock() }
+        tap(R.id.btnEpisodes) { showEpisodesPanel() }
+        tap(R.id.btnTracks) { chooseTracks() }
+        tap(R.id.btnNextEp) { nextByUser() }
+        findViewById<View>(R.id.btnPanelClose).setOnClickListener { hideEpisodesPanel() }
+        btnPanelSeason.setOnClickListener { choosePanelSeason() }
+        findViewById<View>(R.id.btnPlayNow).setOnClickListener { playNextNow() }
+        findViewById<View>(R.id.btnCancelNext).setOnClickListener { cancelNext() }
+        btnSkip.setOnClickListener {
+            val action = skipAction
             hideSkipButton()
+            action?.invoke()
+        }
+        btnUnlock.setOnClickListener {
+            showUnlockHint()
+            showToast("แตะค้างเพื่อปลดล็อก")
+        }
+        btnUnlock.setOnLongClickListener {
+            unlock()
+            true
+        }
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                if (fromUser) txtPosition.text = TimeText.format(progress)
+            }
+
+            override fun onStartTrackingTouch(bar: SeekBar) {
+                dragging = true
+                handler.removeCallbacks(hideControls)
+            }
+
+            override fun onStopTrackingTouch(bar: SeekBar) {
+                dragging = false
+                engine.seek(bar.progress * 1000L)
+                scheduleHide()
+            }
+        })
+        panelAdapter = SimpleAdapter(R.layout.item_episode_card) { v, i -> bindPanelCard(v, i) }
+        panelList.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        panelList.adapter = panelAdapter
+        updateSpeedLabel()
+        updateRotateLabel()
+        updateSeekLabels()
+    }
+
+    private fun updateSeekLabels() {
+        val step = Settings.seekStepSec(this)
+        btnRew.text = "↺\n$step"
+        btnFwd.text = "↻\n$step"
+    }
+
+    private fun setControlsVisible(visible: Boolean) {
+        if (!::controls.isInitialized) return
+        handler.removeCallbacks(hideControls)
+        if (visible && (locked || inPip || episodesPanel.visibility == View.VISIBLE)) return
+        controls.visibility = if (visible) View.VISIBLE else View.GONE
+        if (visible) {
+            updateProgressUi()
+            scheduleHide()
+        }
+    }
+
+    /** Fade the controls after a few seconds, but only while the video is playing. */
+    private fun scheduleHide() {
+        handler.removeCallbacks(hideControls)
+        if (::engine.isInitialized && engine.isPlaying && !dragging) handler.postDelayed(hideControls, CONTROLS_TIMEOUT_MS)
+    }
+
+    private fun updateProgressUi() {
+        if (!::engine.isInitialized || dragging || controls.visibility != View.VISIBLE) return
+        val pos = engine.time
+        val dur = engine.length
+        txtPosition.text = TimeText.ms(pos)
+        if (dur > 0) {
+            seekBar.max = (dur / 1000).toInt()
+            seekBar.progress = (pos / 1000).toInt()
+            txtRemaining.text = "-${TimeText.ms(dur - pos)}"
+        } else {
+            txtRemaining.text = ""
+        }
+    }
+
+    private fun updateTitle() {
+        txtSeriesName.text = series.name
+        txtTitle.text = "ตอนที่ ${index + 1}/${series.episodes.size} · ${currentEpisode().shortName}"
+    }
+
+    private fun seekBy(delta: Long) {
+        val dur = engine.length
+        var target = engine.time + delta
+        if (dur > 0) target = target.coerceAtMost(dur - 500)
+        target = target.coerceAtLeast(0L)
+        engine.seek(target)
+        val sec = abs(delta) / 1000
+        showGesture("${if (delta > 0) "⏩ +$sec" else "⏪ −$sec"} วินาที\n${TimeText.ms(target)}")
+    }
+
+    private fun showGesture(text: String, hideAfter: Long = 700) {
+        txtGesture.text = text
+        txtGesture.visibility = View.VISIBLE
+        handler.removeCallbacks(hideGesture)
+        if (hideAfter > 0) handler.postDelayed(hideGesture, hideAfter)
+    }
+
+    // ---- Gestures: tap, double tap, swipe ----
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupGestures() {
+        val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean = true
+
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                when {
+                    locked -> showUnlockHint()
+                    inPip -> Unit
+                    episodesPanel.visibility == View.VISIBLE -> hideEpisodesPanel()
+                    controls.visibility == View.VISIBLE -> setControlsVisible(false)
+                    else -> setControlsVisible(true)
+                }
+                return true
+            }
+
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (!locked && !inPip) seekBy(if (e.x > videoFrame.width / 2f) seekStepMs else -seekStepMs)
+                return true
+            }
+
+            override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+                if (e1 == null || locked || inPip || !Settings.gestures(this@PlayerActivity)) return false
+                if (drag == Drag.NONE) beginDrag(e1, e2)
+                updateDrag(e2)
+                return true
+            }
+        })
+        videoFrame.setOnTouchListener { _, event ->
+            detector.onTouchEvent(event)
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) endDrag()
+            true
+        }
+    }
+
+    private fun beginDrag(start: MotionEvent, now: MotionEvent) {
+        val h = videoFrame.height.toFloat()
+        val w = videoFrame.width.toFloat()
+        dragStartX = start.x
+        dragStartY = start.y
+        // Leave the screen edges to the system's own swipe gestures.
+        if (start.y < h * 0.08f || start.y > h * 0.92f) {
+            drag = Drag.IGNORE
             return
         }
-        skipAction = action
-        if (btnSkip.text.toString() != label) btnSkip.text = label
-        btnSkip.visibility = View.VISIBLE
-    }
-
-    private fun hideSkipButton() {
-        skipAction = null
-        if (::btnSkip.isInitialized) btnSkip.visibility = View.GONE
-    }
-
-    private fun skipToNextByUser() {
-        if (player.hasNextMediaItem()) {
-            playNextNow()
-        } else {
-            player.pause()
-            record(currentEpisode(), player.currentPosition, player.duration, ended = true)
-            onSeriesFinished()
+        drag = when {
+            abs(now.x - start.x) > abs(now.y - start.y) -> Drag.SEEK
+            start.x < w / 2 -> Drag.BRIGHTNESS
+            else -> Drag.VOLUME
+        }
+        when (drag) {
+            Drag.SEEK -> {
+                dragStartPos = engine.time
+                dragSeekTarget = dragStartPos
+            }
+            Drag.BRIGHTNESS -> {
+                val current = window.attributes.screenBrightness
+                dragStartValue = if (current >= 0) current else systemBrightness()
+            }
+            Drag.VOLUME -> {
+                val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                dragStartValue = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max
+            }
+            else -> Unit
         }
     }
 
-    // ---- End of a clip: auto-play, countdown, stop ----
-
-    private fun stopsAfter(index: Int) = if (stopAfterIndex >= 0) index == stopAfterIndex else !series.autoPlay
-
-    /** Let the player pause by itself at the end of the clip whenever we may not move straight on. */
-    private fun updatePauseAtEnd() {
-        if (!::player.isInitialized) return
-        player.pauseAtEndOfMediaItems = series.countdown || stopsAfter(player.currentMediaItemIndex)
+    private fun systemBrightness(): Float = try {
+        android.provider.Settings.System.getInt(contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS) / 255f
+    } catch (e: Exception) {
+        0.5f
     }
 
-    /** The clip is over: either it reached its end, or its outro started. */
-    private fun onClipEnded(position: Long, duration: Long) {
-        val index = player.currentMediaItemIndex
-        when {
-            stopsAfter(index) -> {
-                val planned = stopAfterIndex >= 0
-                if (planned) stopAfterIndex = -1
-                stopAtEndOfClip(position, duration, if (planned) "ดูจบตามที่ตั้งไว้แล้ว ราตรีสวัสดิ์ 💤" else null)
-                updatePauseAtEnd()
-                updateSleepLabel()
+    private fun updateDrag(now: MotionEvent) {
+        val h = videoFrame.height.coerceAtLeast(1).toFloat()
+        val w = videoFrame.width.coerceAtLeast(1).toFloat()
+        when (drag) {
+            Drag.SEEK -> {
+                val len = engine.length
+                // The full width of the screen is two minutes.
+                val delta = ((now.x - dragStartX) / w * 120_000).toLong()
+                dragSeekTarget = (dragStartPos + delta).coerceIn(0L, if (len > 0) len - 500 else Long.MAX_VALUE)
+                val shift = dragSeekTarget - dragStartPos
+                val sign = if (shift >= 0) "+" else "−"
+                val total = if (len > 0) " / ${TimeText.ms(len)}" else ""
+                showGesture("${if (shift >= 0) "⏩" else "⏪"} $sign${TimeText.ms(abs(shift))}\n${TimeText.ms(dragSeekTarget)}$total", 0)
             }
-            !player.hasNextMediaItem() -> {
-                player.pause()
-                record(currentEpisode(), position, duration, ended = true)
-                onSeriesFinished()
+            Drag.BRIGHTNESS -> {
+                val v = (dragStartValue + (dragStartY - now.y) / h * 1.2f).coerceIn(0.01f, 1f)
+                window.attributes = window.attributes.apply { screenBrightness = v }
+                showGesture("☀ ความสว่าง ${(v * 100).roundToInt()}%", 0)
             }
-            series.countdown -> startCountdown()
-            else -> playNextNow()
+            Drag.VOLUME -> {
+                val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                val v = (dragStartValue + (dragStartY - now.y) / h * 1.2f).coerceIn(0f, 1f)
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (v * max).roundToInt(), 0)
+                showGesture("🔊 เสียง ${(v * 100).roundToInt()}%", 0)
+            }
+            else -> Unit
         }
     }
 
-    private fun startCountdown() {
-        if (countdownLeft > 0) return
+    private fun endDrag() {
+        if (drag == Drag.SEEK) engine.seek(dragSeekTarget)
+        if (drag != Drag.NONE && drag != Drag.IGNORE) {
+            handler.removeCallbacks(hideGesture)
+            handler.postDelayed(hideGesture, 500)
+        }
+        drag = Drag.NONE
+    }
+
+    // ---- Lock ----
+
+    private fun lock() {
+        setControlsVisible(false)
+        locked = true
+        lockedBack.isEnabled = true
+        episodesPanel.visibility = View.GONE
         hideSkipButton()
-        countdownLeft = COUNTDOWN_SECONDS
-        updateCountdownText()
-        countdownBox.visibility = if (inPip) View.GONE else View.VISIBLE
-        handler.removeCallbacks(countdownTick)
-        handler.postDelayed(countdownTick, 1_000)
+        showUnlockHint()
+        showToast("ล็อกหน้าจอแล้ว · แตะค้างที่ 🔓 เพื่อปลดล็อก")
     }
 
-    private fun updateCountdownText() {
-        val next = series.episodes.getOrNull(player.currentMediaItemIndex + 1)?.name ?: ""
-        txtCountdown.text = "ตอนต่อไปใน $countdownLeft วินาที\n$next"
+    private fun unlock() {
+        locked = false
+        lockedBack.isEnabled = false
+        handler.removeCallbacks(hideUnlock)
+        btnUnlock.visibility = View.GONE
+        setControlsVisible(true)
+        showToast("ปลดล็อกแล้ว")
     }
 
-    private fun cancelCountdown() {
-        countdownLeft = 0
-        handler.removeCallbacks(countdownTick)
-        if (::countdownBox.isInitialized) countdownBox.visibility = View.GONE
+    private fun showUnlockHint() {
+        if (inPip) return
+        btnUnlock.visibility = View.VISIBLE
+        handler.removeCallbacks(hideUnlock)
+        handler.postDelayed(hideUnlock, 3_000)
     }
 
-    private fun playNextNow() {
-        cancelCountdown()
-        if (player.hasNextMediaItem()) {
-            player.seekToNextMediaItem()
-            player.play()
+    // ---- Picture size, rotation, speed, tracks ----
+
+    private fun setResize(mode: Int) {
+        series.resizeMode = mode
+        engine.setScale(mode)
+        saveProgress()
+        showToast("ขนาดภาพ: ${RESIZE_NAMES[mode]}")
+    }
+
+    private fun applyOrientation() {
+        if (inPip) return
+        val want = when (series.orientation) {
+            1 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            2 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            3 -> ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+            else -> {
+                val portrait = if (::engine.isInitialized) engine.isPortraitVideo() else null
+                if (portrait == true) {
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                }
+            }
+        }
+        if (requestedOrientation != want) requestedOrientation = want
+    }
+
+    private fun toggleRotation() {
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        series.orientation = if (landscape) 2 else 1
+        applyOrientation()
+        updateRotateLabel()
+        saveProgress()
+        showToast(if (landscape) "ล็อกแนวตั้ง · แตะค้างเพื่อหมุนอัตโนมัติ" else "ล็อกแนวนอน · แตะค้างเพื่อหมุนอัตโนมัติ")
+    }
+
+    private fun updateRotateLabel() {
+        btnRotate.text = when (series.orientation) {
+            1 -> "▭ แนวนอน"
+            2 -> "▯ แนวตั้ง"
+            3 -> "⟳ ตามเครื่อง"
+            else -> "⟳ หมุน"
         }
     }
 
-    /** "Cancel" on the countdown: stay on this clip and stop when it ends. */
-    private fun cancelNext() {
-        cancelCountdown()
-        stopAfterIndex = player.currentMediaItemIndex
-        updatePauseAtEnd()
-        updateSleepLabel()
-        showToast("ยกเลิกแล้ว · จะหยุดเมื่อจบตอนนี้")
+    private fun speedText(x: Float) = if (x == 1f) "1x" else "${x}x".replace(".0x", "x")
+
+    private fun updateSpeedLabel() {
+        btnSpeed.text = "ความเร็ว ${speedText(series.speed)}"
     }
 
-    /** Pause, count the clip as watched and wait for the user. */
-    private fun stopAtEndOfClip(position: Long, duration: Long, message: String?) {
-        player.pause()
-        record(currentEpisode(), position, duration, ended = true)
-        series.lastWatchedAt = System.currentTimeMillis()
-        Store.put(this, series)
-        setControlsVisible(true)
-        showToast(
-            message ?: if (player.hasNextMediaItem()) "จบตอนนี้แล้ว · กด ⏭ เพื่อดูตอนต่อไป" else "จบตอนสุดท้ายแล้ว 🎉"
+    private fun chooseSpeed() {
+        Dialogs.choose(
+            this, "ความเร็วในการเล่น",
+            SPEEDS.map { speedText(it) + if (it == 1f) " (ปกติ)" else "" },
+            SPEEDS.indexOf(series.speed),
+        ) { i ->
+            series.speed = SPEEDS[i]
+            engine.setSpeed(series.speed)
+            updateSpeedLabel()
+            saveProgress()
+        }
+    }
+
+    private fun chooseTracks() {
+        val items = engine.trackItems()
+        if (items.isEmpty()) {
+            showToast("ไฟล์นี้ไม่มีเสียงหรือซับไตเติลให้เลือก")
+            return
+        }
+        Dialogs.menu(this, "เสียงและซับไตเติล", items)
+    }
+
+    // ---- Menus ----
+
+    private fun check(on: Boolean) = if (on) "✅" else "⬜"
+
+    private fun showMenu() {
+        val pos = engine.time
+        val sec = (pos / 1000).toInt()
+        val now = TimeText.format(sec)
+        val ep = currentEpisode()
+        val introNote = if (series.introEndOf(ep) > series.introStartOf(ep)) {
+            " (${TimeText.format(series.introStartOf(ep))}–${TimeText.format(series.introEndOf(ep))})"
+        } else {
+            " (ยังไม่ได้ตั้ง)"
+        }
+        val outroNote = if (series.outroOf(ep) > 0) " (${TimeText.format(series.outroOf(ep))} สุดท้าย)" else " (ยังไม่ได้ตั้ง)"
+        val sleepNote = when {
+            sleepAt > 0 -> " (เหลือ ${TimeText.ms(sleepAt - System.currentTimeMillis())})"
+            stopAfterIndex >= 0 -> " (หยุดหลังตอนที่ ${stopAfterIndex + 1})"
+            else -> ""
+        }
+        Dialogs.menu(
+            this, "ตอนที่ ${index + 1} · ${ep.shortName}", listOf(
+                "🎬 ภาพแตก / เล่นไม่ได้? เปลี่ยนตัวเล่น (ตอนนี้: ${Engines.shortName(engineKind)})" to { chooseEngine() },
+                "⏾ ตั้งเวลาปิด$sleepNote" to { showSleepMenu() },
+                "1️⃣ ดูอีกตอนเดียวแล้วหยุด" to { oneMoreEpisode() },
+                "🗗 ดูแบบจอลอย" to { enterPip() },
+                "${check(series.skipIntro)} ข้ามเพลงเปิด$introNote" to {
+                    series.skipIntro = !series.skipIntro
+                    saveProgress()
+                    showToast(if (series.skipIntro) "เปิดการข้ามเพลงเปิด" else "ปิดการข้ามเพลงเปิด")
+                },
+                "${check(series.skipOutro)} ข้ามเพลงปิด$outroNote" to {
+                    series.skipOutro = !series.skipOutro
+                    saveProgress()
+                    showToast(if (series.skipOutro) "เปิดการข้ามเพลงปิด" else "ปิดการข้ามเพลงปิด")
+                },
+                "⏱ ตอนนี้ ($now) = จุดเริ่มเพลงเปิด" to { chooseScope { setIntroStart(sec, it) } },
+                "⏱ ตอนนี้ ($now) = จุดจบเพลงเปิด" to { chooseScope { setIntroEnd(sec, it) } },
+                "⏱ ตอนนี้ ($now) = จุดเริ่มเพลงปิด" to { chooseScope { setOutroFrom(pos, it) } },
+                "⚙ พิมพ์เวลาข้ามเพลงเอง" to { chooseScope { editSkipTimes(it) } },
+                "🎛 ตั้งค่าการเล่นอื่นๆ" to { showPlaybackSettings() },
+            )
         )
+    }
+
+    private fun showPlaybackSettings() {
+        val orientation = ORIENTATION_NAMES[series.orientation.coerceIn(0, ORIENTATION_NAMES.size - 1)]
+        val resize = RESIZE_NAMES[series.resizeMode.coerceIn(0, RESIZE_NAMES.size - 1)]
+        val items = mutableListOf<Pair<CharSequence, () -> Unit>>(
+            "${check(series.autoPlay)} เล่นตอนต่อไปอัตโนมัติ" to {
+                series.autoPlay = !series.autoPlay
+                saveProgress()
+                showToast(if (series.autoPlay) "จบตอนแล้วไปตอนต่อไปเลย" else "จบตอนแล้วจะหยุดรอ")
+            },
+            "${check(series.countdown)} นับถอยหลัง $COUNTDOWN_SECONDS วินาทีก่อนไปตอนต่อไป" to {
+                series.countdown = !series.countdown
+                saveProgress()
+            },
+            "${check(series.skipManual)} ข้ามเพลงแบบกดปุ่มเอง (แบบ Netflix)" to {
+                series.skipManual = !series.skipManual
+                hideSkipButton()
+                // Don't jump right away if the switch to auto happens mid-intro or mid-outro.
+                introHandled = true
+                outroHandled = true
+                saveProgress()
+            },
+            "📱 การหมุนจอ: $orientation" to {
+                Dialogs.choose(this, "การหมุนจอ", ORIENTATION_NAMES, series.orientation) { i ->
+                    series.orientation = i
+                    applyOrientation()
+                    updateRotateLabel()
+                    saveProgress()
+                }
+            },
+            "🔲 ขนาดภาพ: $resize" to {
+                Dialogs.choose(this, "ขนาดภาพ", RESIZE_NAMES, series.resizeMode) { setResize(it) }
+            },
+            "⏲ ความเร็ว: ${speedText(series.speed)}" to { chooseSpeed() },
+            "💬 เสียงและซับไตเติล" to { chooseTracks() },
+        )
+        if (engineKind == Engines.VLC) {
+            items.add("${check(!series.vlcHardware)} VLC ถอดรหัสด้วยซอฟต์แวร์ (แก้ภาพแตก กินแบตขึ้น)" to {
+                series.vlcHardware = !series.vlcHardware
+                val pos = engine.time
+                saveProgress()
+                startOn(Engines.VLC, pos, fresh = true)
+            })
+        }
+        items.add("${check(Settings.backgroundAudio(this))} เล่นเสียงต่อเมื่อปิดจอ (ทุกเรื่อง)" to {
+            val on = !Settings.backgroundAudio(this)
+            Settings.setBackgroundAudio(this, on)
+            if (on) startBackgroundNotification() else stopBackgroundNotification()
+            showToast(if (on) "ปิดจอแล้วเสียงจะเล่นต่อ" else "ปิดจอแล้วจะหยุดเล่น")
+        })
+        items.add("${check(Settings.autoPip(this))} เข้าจอลอยอัตโนมัติเมื่อกดออก (ทุกเรื่อง)" to {
+            Settings.setAutoPip(this, !Settings.autoPip(this))
+        })
+        items.add("${check(Settings.gestures(this))} ปัดจอเพื่อกรอ / ปรับแสง / ปรับเสียง (ทุกเรื่อง)" to {
+            Settings.setGestures(this, !Settings.gestures(this))
+        })
+        Dialogs.menu(this, "ตั้งค่าการเล่น · ${series.name}", items)
     }
 
     // ---- Sleep timer ----
 
     private fun showSleepMenu() {
-        val items = mutableListOf<Pair<String, () -> Unit>>()
+        val items = mutableListOf<Pair<CharSequence, () -> Unit>>()
         if (sleepAt > 0 || stopAfterIndex >= 0) {
             items.add("⏹ ยกเลิกการตั้งเวลา" to {
                 setSleep(0L, -1)
@@ -1151,7 +1127,7 @@ class PlayerActivity : ThemedActivity() {
             })
         }
         items.add("หยุดเมื่อจบตอนนี้" to {
-            setSleep(0L, player.currentMediaItemIndex)
+            setSleep(0L, index)
             showToast("จะหยุดเมื่อจบตอนนี้")
         })
         items.add("ดูอีกตอนเดียวแล้วหยุด" to { oneMoreEpisode() })
@@ -1161,22 +1137,20 @@ class PlayerActivity : ThemedActivity() {
     private fun setSleep(at: Long, stopAfter: Int) {
         sleepAt = at
         stopAfterIndex = stopAfter
-        updatePauseAtEnd()
         updateSleepLabel()
     }
 
     private fun oneMoreEpisode() {
-        val i = player.currentMediaItemIndex
-        val target = if (player.hasNextMediaItem()) i + 1 else i
+        val target = if (hasNext()) index + 1 else index
         setSleep(0L, target)
         showToast("ดูต่ออีกตอนเดียว · จะหยุดเมื่อจบตอนที่ ${target + 1}")
     }
 
     private fun checkSleep() {
-        if (sleepAt == 0L || !::player.isInitialized) return
+        if (sleepAt == 0L) return
         if (System.currentTimeMillis() >= sleepAt) {
             sleepAt = 0L
-            player.pause()
+            engine.pause()
             saveProgress()
             showToast("หมดเวลาที่ตั้งไว้ หยุดเล่นแล้ว 💤")
         }
@@ -1194,52 +1168,208 @@ class PlayerActivity : ThemedActivity() {
         if (text != null) txtSleep.text = text
     }
 
-    // ---- Progress ----
+    // ---- Episode picker ----
 
-    private fun updateTitle() {
-        val i = player.currentMediaItemIndex
-        val ep = series.episodes.getOrNull(i) ?: return
-        txtTitle.text = "ตอนที่ ${i + 1}/${series.episodes.size} · ${ep.name}"
+    private fun showEpisodesPanel() {
+        setControlsVisible(false)
+        panelSeason = currentEpisode().season
+        renderPanel()
+        episodesPanel.visibility = View.VISIBLE
     }
 
-    private fun track() {
-        if (!::player.isInitialized || finished || player.currentMediaItemIndex != trackedIndex) return
-        trackedPosition = player.currentPosition
-        if (player.duration != C.TIME_UNSET) trackedDuration = player.duration
-        val now = System.currentTimeMillis()
-        if (player.isPlaying && now - lastSavedAt > 5_000) saveProgress()
+    private fun hideEpisodesPanel() {
+        episodesPanel.visibility = View.GONE
+        setControlsVisible(true)
     }
 
-    private fun record(ep: Episode, position: Long, duration: Long, ended: Boolean) {
-        series.recordProgress(ep, if (position < 0) 0L else position, duration, ended)
+    private fun renderPanel() {
+        val seasons = series.seasons()
+        if (seasons.size > 1) {
+            btnPanelSeason.visibility = View.VISIBLE
+            btnPanelSeason.text = "${TimeText.seasonLabel(panelSeason)} ▾"
+        } else {
+            btnPanelSeason.visibility = View.GONE
+        }
+        val shown = series.episodes.indices.filter { seasons.size <= 1 || series.episodes[it].season == panelSeason }
+        panelAdapter.items = shown
+        val at = shown.indexOf(index)
+        if (at >= 0) (panelList.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(at, 48)
     }
 
-    private fun onSeriesFinished() {
-        if (finished) return
-        finished = true
-        series.lastWatchedAt = System.currentTimeMillis()
-        Store.put(this, series)
-        showToast("ดูครบทุกตอนแล้ว 🎉")
-        finish()
+    private fun choosePanelSeason() {
+        val seasons = series.seasons()
+        Dialogs.choose(this, "เลือกภาค", seasons.map { TimeText.seasonLabel(it) }, seasons.indexOf(panelSeason)) { i ->
+            panelSeason = seasons[i]
+            renderPanel()
+        }
     }
+
+    private fun bindPanelCard(v: View, i: Int) {
+        val ep = series.episodes[i]
+        val current = i == index
+        Thumbs.load(this, ep.uri, v.findViewById<ImageView>(R.id.imgThumb))
+        v.findViewById<MaterialCardView>(R.id.card).strokeWidth =
+            if (current) (3 * resources.displayMetrics.density).toInt() else 0
+        v.findViewById<TextView>(R.id.txtTitle).text = "${i + 1}. ${ep.shortName}"
+        v.findViewById<TextView>(R.id.txtSubtitle).text = if (current) "▶ กำลังเล่น" else TimeText.progress(ep)
+        v.findViewById<ProgressBar>(R.id.progress).showPercent(TimeText.percent(ep))
+        v.setOnClickListener {
+            episodesPanel.visibility = View.GONE
+            if (current) {
+                engine.play()
+            } else {
+                saveProgress()
+                openClip(i, ep.resumePosition)
+            }
+        }
+    }
+
+    // ---- Picture-in-picture ----
+
+    private fun enterPip() {
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+            showToast("เครื่องนี้ไม่รองรับจอลอย")
+            return
+        }
+        val ratio = (engine.videoAspect() ?: (16f / 9f)).coerceIn(0.42f, 2.38f)
+        val params = PictureInPictureParams.Builder()
+            .setAspectRatio(Rational((ratio * 1000).toInt(), 1000))
+            .build()
+        try {
+            enterPictureInPictureMode(params)
+        } catch (e: IllegalStateException) {
+            showToast("เปิดจอลอยไม่ได้")
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (::engine.isInitialized && Settings.autoPip(this) && engine.isPlaying && !locked) enterPip()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        inPip = isInPictureInPictureMode
+        if (inPip) {
+            controls.visibility = View.GONE
+            episodesPanel.visibility = View.GONE
+            countdownBox.visibility = View.GONE
+            btnUnlock.visibility = View.GONE
+            txtGesture.visibility = View.GONE
+            hideSkipButton()
+        } else {
+            // Closing the floating window leaves the activity stopped; treat that as closing the player.
+            if (lifecycle.currentState == Lifecycle.State.CREATED) {
+                finish()
+                return
+            }
+            if (countdownLeft > 0) countdownBox.visibility = View.VISIBLE
+            applyOrientation()
+        }
+    }
+
+    // ---- Media session and notification ----
+
+    private fun setupSession() {
+        session = MediaSession(this, "AutoPlayVideo")
+        session.setCallback(object : MediaSession.Callback() {
+            override fun onPlay() {
+                if (::engine.isInitialized && !engine.isPlaying) togglePlay()
+            }
+
+            override fun onPause() {
+                if (::engine.isInitialized) engine.pause()
+            }
+
+            override fun onSkipToNext() = nextByUser()
+
+            override fun onSkipToPrevious() = previousByUser()
+
+            override fun onSeekTo(pos: Long) {
+                if (::engine.isInitialized) engine.seek(pos)
+            }
+
+            override fun onStop() {
+                if (::engine.isInitialized) engine.pause()
+            }
+        })
+        session.isActive = true
+    }
+
+    private fun updateSession() {
+        if (!::session.isInitialized || !::engine.isInitialized || finished) return
+        val ep = currentEpisode()
+        val playing = engine.isPlaying
+        val meta = MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, ep.shortName)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, series.name)
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, engine.length)
+        Thumbs.cached(ep.uri)?.let { meta.putBitmap(MediaMetadata.METADATA_KEY_ART, it) }
+        session.setMetadata(meta.build())
+        session.setPlaybackState(
+            PlaybackState.Builder()
+                .setActions(
+                    PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or
+                        PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+                        PlaybackState.ACTION_SEEK_TO or PlaybackState.ACTION_STOP
+                )
+                .setState(
+                    if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                    engine.time,
+                    if (playing) series.speed else 0f,
+                )
+                .build()
+        )
+        if (notificationShown) {
+            val n = PlaybackNotification.build(this, series, ep, index, playing, session.sessionToken)
+            PlaybackNotification.current = n
+            getSystemService(NotificationManager::class.java).notify(PlaybackNotification.ID, n)
+        }
+    }
+
+    /** Shows the "now playing" notification, which keeps sound going while the screen is off. */
+    private fun startBackgroundNotification() {
+        if (notificationShown || finished || isFinishing || !Settings.backgroundAudio(this)) return
+        if (Build.VERSION.SDK_INT >= 33 && !Settings.notificationsAsked(this) &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Settings.setNotificationsAsked(this)
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        PlaybackNotification.current =
+            PlaybackNotification.build(this, series, currentEpisode(), index, true, session.sessionToken)
+        notificationShown = KeepAliveService.start(this)
+    }
+
+    private fun stopBackgroundNotification() {
+        if (!notificationShown) return
+        notificationShown = false
+        KeepAliveService.stop(this)
+    }
+
+    private fun showFirstTimeHint() {
+        if (Settings.hintCount(this) >= 3) return
+        Settings.bumpHint(this)
+        handler.postDelayed({
+            if (!finished) showToast("ภาพแตกหรือเล่นไม่ได้? แตะปุ่ม 🎬 ด้านบนเพื่อเปลี่ยนตัวเล่น", long = true)
+        }, 3_000)
+    }
+
+    // ---- Progress and lifecycle ----
 
     private fun saveProgress() {
-        if (!::player.isInitialized || finished) return
-        val index = player.currentMediaItemIndex
-        val ep = series.episodes.getOrNull(index) ?: return
-        record(ep, player.currentPosition, player.duration, ended = false)
+        if (!::engine.isInitialized || finished) return
+        series.recordProgress(currentEpisode(), engine.time, engine.length, ended = ended)
         series.lastIndex = index
         series.lastWatchedAt = System.currentTimeMillis()
         lastSavedAt = series.lastWatchedAt
         Store.put(this, series)
     }
 
-    private fun showToast(msg: String) {
+    private fun showToast(msg: String, long: Boolean = false) {
         toast?.cancel()
-        toast = Toast.makeText(this, msg, Toast.LENGTH_SHORT).also { it.show() }
+        toast = Toast.makeText(this, msg, if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).also { it.show() }
     }
-
-    // ---- Window and lifecycle ----
 
     private fun hideSystemUi() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -1258,26 +1388,27 @@ class PlayerActivity : ThemedActivity() {
         super.onStart()
         handler.removeCallbacks(ticker)
         handler.post(ticker)
+        if (::engine.isInitialized) engine.onForeground()
     }
 
     override fun onStop() {
         super.onStop()
-        if (!::player.isInitialized) return
+        if (!::engine.isInitialized) return
         saveProgress()
-        if (!keepPlayingInBackground(player.isPlaying)) {
+        if (keepPlayingInBackground(engine.isPlaying)) {
+            engine.onBackground()
+        } else {
             handler.removeCallbacks(ticker)
-            player.pause()
+            engine.pause()
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
-        if (::player.isInitialized) {
-            controllerFuture?.let { MediaController.releaseFuture(it) }
-            PlaybackService.shutdown()
-            PlayerHolder.player = null
-            player.release()
-        }
+        if (receiverRegistered) unregisterReceiver(mediaReceiver)
+        stopBackgroundNotification()
+        if (::session.isInitialized) session.release()
+        if (::engine.isInitialized) engine.release()
     }
 }

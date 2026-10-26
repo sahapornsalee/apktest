@@ -57,7 +57,6 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
-    implementation("androidx.media3:media3-session:1.5.1")
     implementation("androidx.media3:media3-decoder:1.5.1")
     // FFmpeg audio decoders (AC3, E-AC3, DTS, TrueHD, ...) for the main player.
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")

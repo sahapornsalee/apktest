@@ -1,6 +1,7 @@
 package com.sahaporn.autoplay
 
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
@@ -14,6 +15,8 @@ import androidx.appcompat.widget.SwitchCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
 
 /** Series detail: big play button, quick actions and the episode list, split by season. */
 class SeriesActivity : ThemedActivity() {
@@ -27,13 +30,15 @@ class SeriesActivity : ThemedActivity() {
     private lateinit var imgHero: ImageView
     private lateinit var txtHeroTitle: TextView
     private lateinit var txtInfo: TextView
-    private lateinit var txtSkipInfo: TextView
     private lateinit var btnResume: Button
     private lateinit var progressResume: ProgressBar
     private lateinit var txtResumeNote: TextView
     private lateinit var swAutoPlay: SwitchCompat
     private lateinit var swCountdown: SwitchCompat
-    private lateinit var btnSeason: Button
+    private lateinit var rowSkip: View
+    private lateinit var rowEngine: View
+    private lateinit var seasonScroll: View
+    private lateinit var seasonChips: ChipGroup
     private lateinit var adapter: SimpleAdapter<Int>
 
     /** Season shown in the list; null when the series has no seasons. */
@@ -42,6 +47,7 @@ class SeriesActivity : ThemedActivity() {
     private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             MediaScan.persist(this, uri)
+            if (series.folderUri == null) series.folderUri = uri.toString()
             addEpisodes { MediaScan.scanTree(this, uri) }
         }
     }
@@ -65,20 +71,23 @@ class SeriesActivity : ThemedActivity() {
         imgHero = findViewById(R.id.imgHero)
         txtHeroTitle = findViewById(R.id.txtHeroTitle)
         txtInfo = findViewById(R.id.txtInfo)
-        txtSkipInfo = findViewById(R.id.txtSkipInfo)
         btnResume = findViewById(R.id.btnResume)
         progressResume = findViewById(R.id.progressResume)
         txtResumeNote = findViewById(R.id.txtResumeNote)
         swAutoPlay = findViewById(R.id.swAutoPlay)
         swCountdown = findViewById(R.id.swCountdown)
-        btnSeason = findViewById(R.id.btnSeason)
+        rowSkip = findViewById(R.id.rowSkip)
+        rowEngine = findViewById(R.id.rowEngine)
+        seasonScroll = findViewById(R.id.seasonScroll)
+        seasonChips = findViewById(R.id.seasonChips)
 
         btnResume.setOnClickListener { Resume.play(this, series) }
         findViewById<View>(R.id.btnRestart).setOnClickListener { Resume.confirmReset(this, series) { render() } }
-        findViewById<View>(R.id.btnSkip).setOnClickListener { showSkipDialog() }
         findViewById<View>(R.id.btnAdd).setOnClickListener { showAddDialog() }
+        findViewById<View>(R.id.btnRescan).setOnClickListener { rescan() }
         findViewById<View>(R.id.btnMoreActions).setOnClickListener { showMoreMenu() }
-        btnSeason.setOnClickListener { chooseSeason() }
+        rowSkip.setOnClickListener { showSkipDialog() }
+        rowEngine.setOnClickListener { chooseEngine() }
 
         adapter = SimpleAdapter(R.layout.item_episode) { v, i -> bindEpisode(v, i) }
         findViewById<RecyclerView>(R.id.rvEpisodes).apply {
@@ -134,7 +143,8 @@ class SeriesActivity : ThemedActivity() {
                         save()
                     }
                 },
-                "🎬 ตัวเล่น: ${Engines.NAMES[series.engine.coerceIn(0, Engines.NAMES.size - 1)]}" to { chooseEngine() },
+                "🎬 ตัวเล่น: ${Engines.name(series.engine)}" to { chooseEngine() },
+                "🔄 สแกนหาตอนใหม่จากโฟลเดอร์" to { rescan() },
                 "เรียงตอนตามชื่อไฟล์" to {
                     series.editEpisodes { eps ->
                         val sorted = MediaScan.sorted(eps)
@@ -156,12 +166,21 @@ class SeriesActivity : ThemedActivity() {
     }
 
     private fun chooseEngine() {
-        Dialogs.menu(this, "เลือกตัวเล่น", Engines.NAMES.mapIndexed { i, name ->
-            (if (i == series.engine) "✓ $name" else name) to {
-                series.engine = i
-                save()
-            }
-        })
+        Dialogs.choose(this, "ตัวเล่นสำหรับเรื่องนี้", Engines.NAMES, series.engine) { i ->
+            series.engine = i
+            if (i == Engines.VLC) series.vlcHardware = false
+            save()
+        }
+    }
+
+    /** Looks in the series' folder again and adds any new episodes. */
+    private fun rescan() {
+        val folder = series.folderUri
+        if (folder == null) {
+            toast("เรื่องนี้ไม่ได้เพิ่มจากโฟลเดอร์ · กด “เพิ่มตอน” แล้วเลือกโฟลเดอร์แทน")
+            return
+        }
+        addEpisodes { MediaScan.scanTree(this, Uri.parse(folder)) }
     }
 
     private fun save() {
@@ -196,7 +215,8 @@ class SeriesActivity : ThemedActivity() {
             txtResumeNote.visibility = View.GONE
         }
 
-        txtSkipInfo.text = skipSummary()
+        setRow(rowSkip, "⏭ ข้ามเพลงเปิด / ปิด", skipSummary())
+        setRow(rowEngine, "🎬 ตัวเล่น", Engines.name(series.engine))
         swAutoPlay.setOnCheckedChangeListener(null)
         swAutoPlay.isChecked = series.autoPlay
         swAutoPlay.setOnCheckedChangeListener { _, checked ->
@@ -214,11 +234,22 @@ class SeriesActivity : ThemedActivity() {
 
         if (seasons.size > 1) {
             if (season !in seasons) season = heroEp?.season ?: seasons.first()
-            btnSeason.visibility = View.VISIBLE
-            btnSeason.text = "${TimeText.seasonLabel(season.orEmpty())} ▾"
+            seasonScroll.visibility = View.VISIBLE
+            seasonChips.removeAllViews()
+            seasons.forEach { s ->
+                val chip = layoutInflater.inflate(R.layout.item_chip, seasonChips, false) as Chip
+                val count = series.episodes.count { it.season == s }
+                chip.text = "${TimeText.seasonLabel(s)} · $count"
+                chip.isChecked = s == season
+                chip.setOnClickListener {
+                    season = s
+                    render()
+                }
+                seasonChips.addView(chip)
+            }
         } else {
             season = null
-            btnSeason.visibility = View.GONE
+            seasonScroll.visibility = View.GONE
         }
         adapter.items = series.episodes.indices.filter { season == null || series.episodes[it].season == season }
     }
@@ -239,14 +270,9 @@ class SeriesActivity : ThemedActivity() {
         return "$intro · $outro$mode"
     }
 
-    private fun chooseSeason() {
-        Dialogs.menu(this, "เลือกภาค", series.seasons().map { s ->
-            val count = series.episodes.count { it.season == s }
-            "${if (s == season) "✓ " else ""}${TimeText.seasonLabel(s)} ($count ตอน)" to {
-                season = s
-                render()
-            }
-        })
+    private fun setRow(row: View, title: String, summary: String) {
+        row.findViewById<TextView>(R.id.txtSettingTitle).text = title
+        row.findViewById<TextView>(R.id.txtSettingSummary).text = summary
     }
 
     private fun bindEpisode(v: View, index: Int) {
@@ -404,9 +430,18 @@ class SeriesActivity : ThemedActivity() {
                     toast("ไม่พบวิดีโอใหม่")
                     return@runOnUiThread
                 }
-                series.editEpisodes { it.addAll(fresh) }
+                // Keep a list that was in file-name order in that order; otherwise append.
+                val wasSorted = series.episodes.map { it.uri } == MediaScan.sorted(series.episodes).map { it.uri }
+                series.editEpisodes { eps ->
+                    eps.addAll(fresh)
+                    if (wasSorted) {
+                        val sorted = MediaScan.sorted(eps)
+                        eps.clear()
+                        eps.addAll(sorted)
+                    }
+                }
                 save()
-                toast("เพิ่ม ${fresh.size} ตอนต่อท้ายแล้ว (เรียงใหม่ได้จากเมนู ⋯)")
+                toast("เพิ่มตอนใหม่ ${fresh.size} ตอนแล้ว")
             }
         }.start()
     }

@@ -50,7 +50,7 @@ object AppTheme {
         if (mode == 3) activity.theme.applyStyle(R.style.ThemeOverlay_AutoPlay_Black, true)
     }
 
-    private fun dot(color: Int, label: String): CharSequence =
+    fun dot(color: Int, label: String): CharSequence =
         SpannableString("●  $label").apply { setSpan(ForegroundColorSpan(color), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
 
     fun showPicker(act: AppCompatActivity) {
@@ -63,7 +63,7 @@ object AppTheme {
         )
     }
 
-    private fun pickMode(act: AppCompatActivity) {
+    fun pickMode(act: AppCompatActivity) {
         val now = mode(act)
         Dialogs.menu(act, "โหมด", MODES.mapIndexed { i, name ->
             (if (i == now) "✓ $name" else name) to {
@@ -74,7 +74,7 @@ object AppTheme {
         })
     }
 
-    private fun pickAccent(act: AppCompatActivity) {
+    fun pickAccent(act: AppCompatActivity) {
         val now = accent(act)
         Dialogs.menu(act, "สีหลัก", ACCENTS.mapIndexed { i, a ->
             dot(a.color, if (i == now) "${a.name}  ✓" else a.name) to {

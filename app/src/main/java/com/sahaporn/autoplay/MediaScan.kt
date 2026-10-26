@@ -3,6 +3,7 @@ package com.sahaporn.autoplay
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 
 object MediaScan {
@@ -25,21 +26,40 @@ object MediaScan {
 
     fun folderName(ctx: Context, treeUri: Uri): String? = DocumentFile.fromTreeUri(ctx, treeUri)?.name
 
-    /** Lists every video in the folder and its subfolders (e.g. one subfolder per season), in natural order. */
+    /**
+     * Lists every video in the folder and its subfolders (e.g. one subfolder per season), in natural
+     * order. Reads each folder with a single query, which is far faster than asking file by file.
+     * Hidden files (Android keeps deleted ones as ".trashed-…") are skipped.
+     */
     fun scanTree(ctx: Context, treeUri: Uri): List<Episode> {
-        val root = DocumentFile.fromTreeUri(ctx, treeUri) ?: return emptyList()
         val out = mutableListOf<Episode>()
-        fun walk(dir: DocumentFile, prefix: String) {
-            for (f in dir.listFiles()) {
-                val name = f.name ?: continue
-                if (f.isDirectory) {
-                    walk(f, "$prefix$name/")
-                } else if (isVideo(name, f.type)) {
-                    out.add(Episode(f.uri.toString(), prefix + name))
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+        )
+        fun walk(docId: String, prefix: String, depth: Int) {
+            if (depth > 8) return
+            val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+            ctx.contentResolver.query(children, projection, null, null, null)?.use { c ->
+                while (c.moveToNext()) {
+                    val id = c.getString(0) ?: continue
+                    val name = c.getString(1) ?: continue
+                    if (name.startsWith(".")) continue
+                    val mime = c.getString(2)
+                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        walk(id, "$prefix$name/", depth + 1)
+                    } else if (isVideo(name, mime)) {
+                        out.add(Episode(DocumentsContract.buildDocumentUriUsingTree(treeUri, id).toString(), prefix + name))
+                    }
                 }
             }
         }
-        walk(root, "")
+        try {
+            walk(DocumentsContract.getTreeDocumentId(treeUri), "", 0)
+        } catch (e: Exception) {
+            // Folder gone or permission revoked; return whatever was found.
+        }
         return sorted(out)
     }
 

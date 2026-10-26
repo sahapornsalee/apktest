@@ -88,6 +88,8 @@ class Series(
     var textOff: Boolean = false,
     var engine: Int = Engines.AUTO,
     var vlcHardware: Boolean = true,
+    /** Folder the series was added from, so new episodes can be picked up later. */
+    var folderUri: String? = null,
     var lastIndex: Int = 0,
     var lastWatchedAt: Long = 0L,
 ) {
@@ -162,6 +164,7 @@ class Series(
         put("textOff", textOff)
         put("engine", engine)
         put("vlcHardware", vlcHardware)
+        folderUri?.let { put("folderUri", it) }
         put("lastIndex", lastIndex)
         put("lastWatchedAt", lastWatchedAt)
         put("episodes", JSONArray().apply { episodes.forEach { put(it.toJson()) } })
@@ -197,6 +200,7 @@ class Series(
                 textOff = o.optBoolean("textOff", false),
                 engine = o.optInt("engine", Engines.AUTO),
                 vlcHardware = o.optBoolean("vlcHardware", true),
+                folderUri = if (o.has("folderUri")) o.getString("folderUri") else null,
                 lastIndex = lastIndex,
                 lastWatchedAt = o.optLong("lastWatchedAt", 0L),
             )
@@ -300,8 +304,9 @@ object Store {
 }
 
 /**
- * Which player opens a series: the main one (ExoPlayer, full features), Android's own player
- * (same as the phone's video app) or VLC (plays nearly any file).
+ * The three engines behind the player: the main one (ExoPlayer, fastest, full subtitles), Android's
+ * own player (same as the phone's video app) and VLC (opens nearly any file). [AUTO] follows the
+ * app-wide default from the settings screen.
  */
 object Engines {
     const val AUTO = 0
@@ -309,12 +314,16 @@ object Engines {
     const val VLC = 2
     const val SYSTEM = 3
 
+    /** Indexed by the constants above. */
     val NAMES = listOf(
         "อัตโนมัติ (เลือกให้ตามชนิดไฟล์)",
-        "ตัวเล่นหลัก (ฟีเจอร์ครบ)",
-        "ตัวเล่นสำรอง VLC (เปิดได้แทบทุกไฟล์)",
-        "ตัวเล่นของระบบ (แบบเดียวกับแอปวิดีโอในเครื่อง)",
+        "ตัวเล่นหลัก (เร็ว ซับครบ)",
+        "VLC (เปิดได้แทบทุกไฟล์)",
+        "ตัวเล่นของระบบ (แบบแอปวิดีโอในเครื่อง)",
     )
+
+    /** Order tried when a clip won't play. */
+    val ORDER = listOf(MAIN, SYSTEM, VLC)
 
     /** Formats the main player handles poorly or not at all. */
     private val VLC_EXT = setOf(
@@ -324,12 +333,21 @@ object Engines {
 
     fun needsVlc(ep: Episode) = ep.name.substringAfterLast('.', "").lowercase() in VLC_EXT
 
-    /** The backup engine ([VLC] or [SYSTEM]) a clip should open in, or null for the main player. */
-    fun backupFor(s: Series, index: Int): Int? = when (s.engine) {
-        VLC -> VLC
-        SYSTEM -> SYSTEM
-        MAIN -> null
-        else -> if (s.episodes.getOrNull(index)?.let { needsVlc(it) } == true) VLC else null
+    fun name(kind: Int) = NAMES[kind.coerceIn(0, NAMES.size - 1)]
+
+    fun shortName(kind: Int) = when (kind) {
+        SYSTEM -> "ตัวเล่นของระบบ"
+        VLC -> "VLC"
+        else -> "ตัวเล่นหลัก"
+    }
+
+    /** Engine a clip starts on: the series' choice, else the app default, else by file type. */
+    fun preferred(ctx: Context, s: Series, ep: Episode): Int {
+        val choice = if (s.engine == AUTO) Settings.defaultEngine(ctx) else s.engine
+        return when (choice) {
+            MAIN, SYSTEM, VLC -> choice
+            else -> if (needsVlc(ep)) VLC else MAIN
+        }
     }
 }
 
@@ -342,6 +360,23 @@ object Settings {
 
     fun autoPip(ctx: Context) = prefs(ctx).getBoolean("auto_pip", false)
     fun setAutoPip(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("auto_pip", on).apply()
+
+    /** Swipe to seek, and up/down for brightness (left) and volume (right). */
+    fun gestures(ctx: Context) = prefs(ctx).getBoolean("gestures", true)
+    fun setGestures(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("gestures", on).apply()
+
+    fun seekStepSec(ctx: Context) = prefs(ctx).getInt("seek_step", 10)
+    fun setSeekStepSec(ctx: Context, sec: Int) = prefs(ctx).edit().putInt("seek_step", sec).apply()
+
+    fun defaultEngine(ctx: Context) = prefs(ctx).getInt("default_engine", Engines.AUTO)
+    fun setDefaultEngine(ctx: Context, kind: Int) = prefs(ctx).edit().putInt("default_engine", kind).apply()
+
+    /** How many times the "picture broken? switch player" tip was shown. */
+    fun hintCount(ctx: Context) = prefs(ctx).getInt("engine_hint", 0)
+    fun bumpHint(ctx: Context) = prefs(ctx).edit().putInt("engine_hint", hintCount(ctx) + 1).apply()
+
+    fun notificationsAsked(ctx: Context) = prefs(ctx).getBoolean("notif_asked", false)
+    fun setNotificationsAsked(ctx: Context) = prefs(ctx).edit().putBoolean("notif_asked", true).apply()
 }
 
 object TimeText {

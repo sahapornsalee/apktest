@@ -31,14 +31,14 @@ class MainActivity : ThemedActivity() {
         if (uri != null) {
             MediaScan.persist(this, uri)
             val name = MediaScan.folderName(this, uri) ?: "เรื่องใหม่"
-            scanAndCreate(name) { MediaScan.scanTree(this, uri) }
+            scanAndCreate(name, uri.toString()) { MediaScan.scanTree(this, uri) }
         }
     }
 
     private val pickFiles = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) {
             uris.forEach { MediaScan.persist(this, it) }
-            scanAndCreate("เรื่องใหม่") { MediaScan.fromUris(this, uris) }
+            scanAndCreate("เรื่องใหม่", null) { MediaScan.fromUris(this, uris) }
         }
     }
 
@@ -71,7 +71,7 @@ class MainActivity : ThemedActivity() {
             })
         }
         menu.add(0, MENU_SEARCH, 0, "ค้นหา").apply {
-            setIcon(android.R.drawable.ic_menu_search)
+            setIcon(R.drawable.ic_search)
             actionView = search
             setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS or MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW)
             setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
@@ -84,9 +84,12 @@ class MainActivity : ThemedActivity() {
                 }
             })
         }
-        menu.add(0, MENU_ADD_CATEGORY, 1, "+ หมวดหมู่")
-        menu.add(0, MENU_THEME, 2, "🎨 ธีมและสี")
-        menu.add(0, MENU_RESET_ALL, 3, "รีเซ็ตการดูทุกเรื่อง")
+        menu.add(0, MENU_SETTINGS, 1, "ตั้งค่า").apply {
+            setIcon(R.drawable.ic_settings)
+            setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        }
+        menu.add(0, MENU_ADD_CATEGORY, 2, "+ เพิ่มหมวดหมู่")
+        menu.add(0, MENU_THEME, 3, "🎨 ธีมและสี")
         return true
     }
 
@@ -97,11 +100,7 @@ class MainActivity : ThemedActivity() {
                 refresh()
             }
             MENU_THEME -> AppTheme.showPicker(this)
-            MENU_RESET_ALL -> Dialogs.confirm(this, "ล้างการจดจำการดูของทุกเรื่อง ทุกตอน?", "รีเซ็ตทั้งหมด") {
-                Store.resetAllProgress(this)
-                toast("รีเซ็ตทั้งหมดแล้ว")
-                refresh()
-            }
+            MENU_SETTINGS -> startActivity(Intent(this, SettingsActivity::class.java))
             else -> return super.onOptionsItemSelected(item)
         }
         return true
@@ -118,7 +117,7 @@ class MainActivity : ThemedActivity() {
             return
         }
         if (all.isEmpty() && cats.isEmpty()) {
-            addMessage(getString(R.string.empty_home))
+            addWelcome()
             return
         }
 
@@ -152,13 +151,28 @@ class MainActivity : ThemedActivity() {
         })
     }
 
+    /** First run: explain the app and offer the two ways to add videos right away. */
+    private fun addWelcome() {
+        val v = layoutInflater.inflate(R.layout.item_empty, content, false)
+        v.findViewById<View>(R.id.btnEmptyFolder).setOnClickListener {
+            pendingCategory = null
+            pickFolder.launch(null)
+        }
+        v.findViewById<View>(R.id.btnEmptyFiles).setOnClickListener {
+            pendingCategory = null
+            pickFiles.launch(arrayOf("*/*"))
+        }
+        content.addView(v)
+    }
+
     private fun addHero(s: Series) {
         val v = layoutInflater.inflate(R.layout.item_hero, content, false)
         val idx = s.resumeIndex() ?: 0
         val ep = s.episodes[idx]
         Thumbs.load(this, ep.uri, v.findViewById(R.id.imgHero))
         v.findViewById<TextView>(R.id.txtHeroTitle).text = s.name
-        v.findViewById<TextView>(R.id.txtHeroSub).text = "ตอนที่ ${idx + 1} · ${ep.shortName}\n${TimeText.progress(ep)}"
+        val left = if (ep.duration > 0 && ep.hasProgress && !ep.watched) " · เหลือ ${TimeText.ms(ep.duration - ep.position)}" else ""
+        v.findViewById<TextView>(R.id.txtHeroSub).text = "ตอนที่ ${idx + 1} · ${ep.shortName}$left"
         v.findViewById<ProgressBar>(R.id.heroProgress).showPercent(TimeText.percent(ep))
         v.findViewById<Button>(R.id.btnHeroPlay).apply {
             text = if (ep.hasProgress) "▶  ดูต่อ" else "▶  เล่น"
@@ -203,6 +217,11 @@ class MainActivity : ThemedActivity() {
         val img = v.findViewById<ImageView>(R.id.imgThumb)
         if (cover != null) Thumbs.load(this, cover.uri, img) else img.setImageDrawable(null)
         v.findViewById<TextView>(R.id.txtTitle).text = if (s.pinned) "📌 ${s.name}" else s.name
+        v.findViewById<TextView>(R.id.txtBadge).text = when {
+            idx == null -> "✓ ดูครบ"
+            s.seasons().size > 1 -> "${s.seasons().size} ภาค"
+            else -> "${s.episodes.size} ตอน"
+        }
         v.findViewById<ProgressBar>(R.id.progress).showPercent(cover?.let { TimeText.percent(it) } ?: -1)
         v.findViewById<TextView>(R.id.txtSubtitle).text = status(s)
         v.setOnClickListener { openSeries(s.id) }
@@ -297,7 +316,7 @@ class MainActivity : ThemedActivity() {
         )
     }
 
-    private fun scanAndCreate(defaultName: String, scan: () -> List<Episode>) {
+    private fun scanAndCreate(defaultName: String, folderUri: String?, scan: () -> List<Episode>) {
         toast("กำลังค้นหาวิดีโอ…")
         Thread {
             val eps = scan()
@@ -308,7 +327,7 @@ class MainActivity : ThemedActivity() {
                 }
                 Dialogs.askText(this, "ตั้งชื่อเรื่อง (${eps.size} ตอน)", defaultName) { name ->
                     val create = { cat: String ->
-                        val s = Series(name = name, category = cat)
+                        val s = Series(name = name, category = cat, folderUri = folderUri)
                         s.episodes.addAll(eps)
                         Store.put(this, s)
                         openSeries(s.id)
@@ -330,7 +349,7 @@ class MainActivity : ThemedActivity() {
 
     companion object {
         private const val MENU_ADD_CATEGORY = 1
-        private const val MENU_RESET_ALL = 4
+        private const val MENU_SETTINGS = 4
         private const val MENU_SEARCH = 5
         private const val MENU_THEME = 6
     }

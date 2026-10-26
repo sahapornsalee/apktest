@@ -26,6 +26,15 @@ object Thumbs {
     private val executor = Executors.newFixedThreadPool(2)
     private val main = Handler(Looper.getMainLooper())
 
+    /** Thumbnail already in memory, for places that can't wait (notification, media session). */
+    fun cached(uri: String): Bitmap? = memory.get(uri)
+
+    fun clear(ctx: Context) {
+        memory.evictAll()
+        failed.clear()
+        File(ctx.cacheDir, "thumbs").deleteRecursively()
+    }
+
     fun load(ctx: Context, uri: String, into: ImageView) {
         into.tag = uri
         val cached = memory.get(uri)

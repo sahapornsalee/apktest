@@ -5,12 +5,42 @@
         <item name="colorOnPrimary">#FFFFFF</item>
         <item name="colorSecondary">@color/primary</item>
         <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.AutoPlay.BottomSheet</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.AutoPlay.Dialog</item>
     </style>
 
     <style name="Theme.AutoPlay.Player" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/primary</item>
         <item name="colorSecondary">@color/primary</item>
         <item name="android:windowBackground">@android:color/black</item>
+        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.AutoPlay.BottomSheet</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.AutoPlay.Dialog</item>
+    </style>
+
+    <!-- Menus slide up as sheets with rounded top corners. -->
+    <style name="ThemeOverlay.AutoPlay.BottomSheet" parent="ThemeOverlay.MaterialComponents.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.AutoPlay.BottomSheet</item>
+    </style>
+
+    <style name="Widget.AutoPlay.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="shapeAppearance">@style/ShapeAppearance.AutoPlay.Sheet</item>
+    </style>
+
+    <style name="ShapeAppearance.AutoPlay.Sheet" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSizeTopLeft">24dp</item>
+        <item name="cornerSizeTopRight">24dp</item>
+        <item name="cornerSizeBottomLeft">0dp</item>
+        <item name="cornerSizeBottomRight">0dp</item>
+    </style>
+
+    <style name="ThemeOverlay.AutoPlay.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.AutoPlay.Dialog</item>
+    </style>
+
+    <style name="ShapeAppearance.AutoPlay.Dialog" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">20dp</item>
     </style>
 
     <style name="OverlayButton" parent="Widget.MaterialComponents.Button.TextButton">
@@ -25,30 +55,53 @@
         <item name="android:textColor">#000000</item>
         <item name="android:textStyle">bold</item>
         <item name="android:textSize">16sp</item>
-        <item name="cornerRadius">4dp</item>
+        <item name="cornerRadius">6dp</item>
     </style>
 
     <style name="GhostButton" parent="Widget.MaterialComponents.Button.UnelevatedButton">
         <item name="backgroundTint">#66808080</item>
         <item name="android:textColor">#FFFFFF</item>
         <item name="android:textSize">15sp</item>
-        <item name="cornerRadius">4dp</item>
+        <item name="cornerRadius">6dp</item>
     </style>
 
-    <!-- Icon-over-label action used under the series hero and in the player's bottom row. -->
+    <!-- Icon-over-label action used under the series hero. -->
     <style name="ActionItem">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_weight">1</item>
         <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
         <item name="android:gravity">center</item>
-        <item name="android:paddingTop">8dp</item>
-        <item name="android:paddingBottom">8dp</item>
+        <item name="android:paddingTop">10dp</item>
+        <item name="android:paddingBottom">10dp</item>
+        <item name="android:drawablePadding">6dp</item>
+        <item name="android:drawableTint">?android:attr/textColorPrimary</item>
+        <item name="android:textColor">?android:attr/textColorSecondary</item>
         <item name="android:textSize">12sp</item>
-        <item name="android:lineSpacingExtra">2dp</item>
     </style>
 
+    <!-- Same, white on the dark player controls. -->
     <style name="PlayerAction" parent="ActionItem">
+        <item name="android:drawableTint">#FFFFFF</item>
         <item name="android:textColor">#FFFFFF</item>
+    </style>
+
+    <style name="TopIcon">
+        <item name="android:layout_width">44dp</item>
+        <item name="android:layout_height">44dp</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:padding">10dp</item>
+        <item name="android:scaleType">fitCenter</item>
+    </style>
+
+    <style name="SectionTitle">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingTop">24dp</item>
+        <item name="android:paddingBottom">6dp</item>
+        <item name="android:textColor">?attr/colorPrimary</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
     </style>
 </resources>

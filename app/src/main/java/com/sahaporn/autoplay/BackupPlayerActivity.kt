@@ -23,6 +23,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.media3.ui.AspectRatioFrameLayout
 import org.videolan.libvlc.util.VLCVideoLayout
 
 /**
@@ -30,6 +31,7 @@ import org.videolan.libvlc.util.VLCVideoLayout
  * own media player (what the phone's video app uses) or VLC, with the same controls, skip times
  * and saved progress, and falls from the system player to VLC when a clip fails.
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class BackupPlayerActivity : ThemedActivity(), EngineHost {
     companion object {
         private const val EXTRA_ENGINE = "engine"
@@ -58,6 +60,7 @@ class BackupPlayerActivity : ThemedActivity(), EngineHost {
     private lateinit var videoFrame: View
     private lateinit var vlcLayout: VLCVideoLayout
     private lateinit var systemSurface: SurfaceView
+    private lateinit var systemFrame: AspectRatioFrameLayout
     private lateinit var controls: View
     private lateinit var txtTitle: TextView
     private lateinit var btnPlay: ImageButton
@@ -121,6 +124,7 @@ class BackupPlayerActivity : ThemedActivity(), EngineHost {
         videoFrame = findViewById(R.id.videoFrame)
         vlcLayout = findViewById(R.id.vlcLayout)
         systemSurface = findViewById(R.id.systemSurface)
+        systemFrame = findViewById(R.id.systemFrame)
         controls = findViewById(R.id.controls)
         txtTitle = findViewById(R.id.txtTitle)
         btnPlay = findViewById(R.id.btnPlay)
@@ -137,9 +141,6 @@ class BackupPlayerActivity : ThemedActivity(), EngineHost {
         setupControls()
         setupGestures()
         onBackPressedDispatcher.addCallback(this, lockedBack)
-        videoFrame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            if (::engine.isInitialized) engine.setScale(series.resizeMode)
-        }
 
         useEngine(intent.getIntExtra(EXTRA_ENGINE, Engines.VLC))
         applyOrientation()
@@ -154,9 +155,9 @@ class BackupPlayerActivity : ThemedActivity(), EngineHost {
         if (::engine.isInitialized) engine.release()
         kind = if (newKind == Engines.SYSTEM) Engines.SYSTEM else Engines.VLC
         vlcLayout.visibility = if (kind == Engines.VLC) View.VISIBLE else View.GONE
-        systemSurface.visibility = if (kind == Engines.SYSTEM) View.VISIBLE else View.GONE
+        systemFrame.visibility = if (kind == Engines.SYSTEM) View.VISIBLE else View.GONE
         engine = if (kind == Engines.SYSTEM) {
-            SystemEngine(this, systemSurface, this)
+            SystemEngine(this, systemSurface, systemFrame, this)
         } else {
             VlcEngine(this, vlcLayout, series.vlcHardware, this, handler)
         }
@@ -195,6 +196,8 @@ class BackupPlayerActivity : ThemedActivity(), EngineHost {
     // ---- Engine events ----
 
     override fun onEnginePlaying() {
+        // Keeps the app alive with a notification so sound continues with the screen off.
+        if (Settings.backgroundAudio(this)) KeepAliveService.start(this, "${series.name} · ตอนที่ ${index + 1}")
         failures = 0
         buffering.visibility = View.GONE
         btnPlay.setImageResource(R.drawable.ic_pause)
@@ -601,6 +604,12 @@ class BackupPlayerActivity : ThemedActivity(), EngineHost {
         val now = TimeText.ms(engine.time)
         val items = mutableListOf<Pair<CharSequence, () -> Unit>>(
             "🎬 เปลี่ยนตัวเล่น (ตอนนี้: ${engineName(kind)})" to { chooseEngine() },
+            "${check(Settings.backgroundAudio(this))} เล่นเสียงต่อเมื่อปิดจอ (ทุกเรื่อง)" to {
+                val on = !Settings.backgroundAudio(this)
+                Settings.setBackgroundAudio(this, on)
+                if (on && engine.isPlaying) KeepAliveService.start(this, series.name) else if (!on) KeepAliveService.stop(this)
+                showToast(if (on) "ปิดจอแล้วเสียงจะเล่นต่อ" else "ปิดจอแล้วจะหยุดเล่น")
+            },
         )
         if (kind == Engines.VLC) {
             items.add("${check(!series.vlcHardware)} ถอดรหัสด้วยซอฟต์แวร์ (แก้ภาพแตก กินแบตขึ้น)" to {
@@ -702,16 +711,19 @@ class BackupPlayerActivity : ThemedActivity(), EngineHost {
 
     override fun onStop() {
         super.onStop()
-        handler.removeCallbacks(ticker)
-        if (::engine.isInitialized) {
-            saveProgress()
+        if (!::engine.isInitialized) return
+        saveProgress()
+        if (!keepPlayingInBackground(engine.isPlaying)) {
+            handler.removeCallbacks(ticker)
             engine.pause()
+            KeepAliveService.stop(this)
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
+        KeepAliveService.stop(this)
         if (::engine.isInitialized) engine.release()
     }
 }

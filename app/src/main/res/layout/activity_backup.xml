@@ -15,12 +15,18 @@
             android:layout_height="match_parent"
             android:visibility="gone" />
 
-        <SurfaceView
-            android:id="@+id/systemSurface"
+        <androidx.media3.ui.AspectRatioFrameLayout
+            android:id="@+id/systemFrame"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:layout_gravity="center"
-            android:visibility="gone" />
+            android:visibility="gone">
+
+            <SurfaceView
+                android:id="@+id/systemSurface"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </androidx.media3.ui.AspectRatioFrameLayout>
     </FrameLayout>
 
     <ProgressBar

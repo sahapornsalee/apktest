@@ -5,17 +5,15 @@ import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Handler
 import android.os.ParcelFileDescriptor
-import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.view.View
-import android.widget.FrameLayout
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.util.VLCVideoLayout
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.AspectRatioFrameLayout
 import java.util.Locale
-import kotlin.math.max
-import kotlin.math.min
 import android.media.MediaPlayer as SystemMediaPlayer
 import org.videolan.libvlc.MediaPlayer as VlcMediaPlayer
 
@@ -52,9 +50,11 @@ interface ClipEngine {
 }
 
 /** Android's own media player: the same decoding path as the phone's built-in video app. */
+@OptIn(UnstableApi::class)
 class SystemEngine(
     private val ctx: Context,
     private val surface: SurfaceView,
+    private val frame: AspectRatioFrameLayout,
     private val host: EngineHost,
 ) : ClipEngine, SurfaceHolder.Callback {
     private val mp = SystemMediaPlayer()
@@ -62,7 +62,6 @@ class SystemEngine(
     private var released = false
     private var startAt = 0L
     private var speed = 1f
-    private var scaleMode = 0
     private var videoW = 0
     private var videoH = 0
 
@@ -91,7 +90,7 @@ class SystemEngine(
         mp.setOnVideoSizeChangedListener { _, w, h ->
             videoW = w
             videoH = h
-            resize()
+            if (w > 0 && h > 0) frame.setAspectRatio(w.toFloat() / h)
             host.onEngineVideoSize()
         }
         mp.setOnInfoListener { _, what, _ ->
@@ -164,29 +163,11 @@ class SystemEngine(
     }
 
     override fun setScale(mode: Int) {
-        scaleMode = mode
-        resize()
-    }
-
-    /** Sizes the surface inside its parent to fit, crop or stretch the picture. */
-    private fun resize() {
-        val parent = surface.parent as? View ?: return
-        val pw = parent.width
-        val ph = parent.height
-        if (videoW <= 0 || videoH <= 0 || pw <= 0 || ph <= 0) return
-        val lp = surface.layoutParams as FrameLayout.LayoutParams
-        if (scaleMode == 2) {
-            lp.width = pw
-            lp.height = ph
-        } else {
-            val sx = pw.toFloat() / videoW
-            val sy = ph.toFloat() / videoH
-            val s = if (scaleMode == 1) max(sx, sy) else min(sx, sy)
-            lp.width = (videoW * s).toInt()
-            lp.height = (videoH * s).toInt()
+        frame.resizeMode = when (mode) {
+            1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
         }
-        lp.gravity = Gravity.CENTER
-        surface.layoutParams = lp
     }
 
     override fun isPortraitVideo(): Boolean? = if (videoW > 0 && videoH > 0) videoH > videoW else null

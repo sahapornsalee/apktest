@@ -337,7 +337,7 @@ object Engines {
 object Settings {
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
-    fun backgroundAudio(ctx: Context) = prefs(ctx).getBoolean("background_audio", false)
+    fun backgroundAudio(ctx: Context) = prefs(ctx).getBoolean("background_audio", true)
     fun setBackgroundAudio(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("background_audio", on).apply()
 
     fun autoPip(ctx: Context) = prefs(ctx).getBoolean("auto_pip", false)

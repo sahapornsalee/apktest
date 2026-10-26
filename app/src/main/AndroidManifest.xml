@@ -40,6 +40,11 @@
             android:theme="@style/Theme.AutoPlay.Player" />
 
         <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <service
             android:name=".PlaybackService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">

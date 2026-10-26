@@ -1264,8 +1264,7 @@ class PlayerActivity : ThemedActivity() {
         super.onStop()
         if (!::player.isInitialized) return
         saveProgress()
-        val keepPlaying = Settings.backgroundAudio(this) && player.isPlaying && !isFinishing
-        if (!keepPlaying) {
+        if (!keepPlayingInBackground(player.isPlaying)) {
             handler.removeCallbacks(ticker)
             player.pause()
         }

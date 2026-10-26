@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.graphics.Color
+import android.os.PowerManager
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -60,6 +61,15 @@ fun AppCompatActivity.setupBars(root: View, toolbar: View) {
         toolbar.setPadding(toolbar.paddingLeft, b.top, toolbar.paddingRight, toolbar.paddingBottom)
         insets
     }
+}
+
+/**
+ * Whether playback should go on as the player leaves the screen: only when the screen was
+ * switched off (not when the user went to another app) and the user allows background sound.
+ */
+fun Activity.keepPlayingInBackground(playing: Boolean): Boolean {
+    val screenOff = !(getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+    return playing && screenOff && !isFinishing && Settings.backgroundAudio(this)
 }
 
 fun Context.toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()

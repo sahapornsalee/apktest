@@ -335,6 +335,13 @@ object Engines {
 
     fun name(kind: Int) = NAMES[kind.coerceIn(0, NAMES.size - 1)]
 
+    /** Fits on the player's top bar. */
+    fun badge(kind: Int) = when (kind) {
+        SYSTEM -> "ระบบ"
+        VLC -> "VLC"
+        else -> "หลัก"
+    }
+
     fun shortName(kind: Int) = when (kind) {
         SYSTEM -> "ตัวเล่นของระบบ"
         VLC -> "VLC"

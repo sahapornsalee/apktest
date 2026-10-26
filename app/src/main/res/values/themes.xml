@@ -84,6 +84,8 @@
     <style name="PlayerAction" parent="ActionItem">
         <item name="android:drawableTint">#FFFFFF</item>
         <item name="android:textColor">#FFFFFF</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
     </style>
 
     <style name="TopIcon">

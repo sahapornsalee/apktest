@@ -25,6 +25,7 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.SurfaceView
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.ImageButton
@@ -37,6 +38,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -49,6 +51,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.card.MaterialCardView
 import org.videolan.libvlc.util.VLCVideoLayout
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
@@ -220,6 +223,7 @@ class PlayerActivity : ThemedActivity(), EngineHost {
         series = s
 
         bindViews()
+        keepControlsClearOfScreenEdges()
         setupControls()
         setupGestures()
         setupSession()
@@ -269,6 +273,37 @@ class PlayerActivity : ThemedActivity(), EngineHost {
         btnUnlock = findViewById(R.id.btnUnlock)
     }
 
+    /**
+     * Pads the controls away from the camera cutout, status bar and gesture bar. Uses the bars'
+     * size even while they're hidden, so nothing jumps when they slide in.
+     */
+    private fun keepControlsClearOfScreenEdges() {
+        val dp = resources.displayMetrics.density
+        fun px(v: Int) = (v * dp).toInt()
+        val topBar = findViewById<View>(R.id.topBar)
+        val bottomBar = findViewById<View>(R.id.bottomBar)
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.playerRoot)) { _, insets ->
+            val bars = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.systemBars())
+            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            val left = max(bars.left, cutout.left)
+            val top = max(bars.top, cutout.top)
+            val right = max(bars.right, cutout.right)
+            val bottom = max(bars.bottom, cutout.bottom)
+            topBar.setPadding(left + px(12), top + px(8), right + px(12), px(28))
+            bottomBar.setPadding(left + px(16), px(40), right + px(16), bottom + px(6))
+            episodesPanel.setPadding(left, px(8), right, bottom + px(16))
+            (btnUnlock.layoutParams as ViewGroup.MarginLayoutParams).topMargin = top + px(24)
+            btnUnlock.requestLayout()
+            for (corner in listOf(btnSkip, countdownBox)) {
+                val lp = corner.layoutParams as ViewGroup.MarginLayoutParams
+                lp.marginEnd = right + px(32)
+                lp.bottomMargin = bottom + px(132)
+                corner.requestLayout()
+            }
+            insets
+        }
+    }
+
     private fun currentEpisode(): Episode = series.episodes[index]
 
     private fun hasNext() = index + 1 < series.episodes.size
@@ -293,7 +328,7 @@ class PlayerActivity : ThemedActivity(), EngineHost {
             else -> ExoEngine(this, exoView, series, this) { Store.put(this, series) }
         }
         engine.setScale(series.resizeMode)
-        btnEngine.text = "🎬 ${Engines.shortName(kind)}"
+        btnEngine.text = "🎬 ${Engines.badge(kind)}"
     }
 
     /** Starts clip [i] at [position] on its preferred engine. */
@@ -972,10 +1007,10 @@ class PlayerActivity : ThemedActivity(), EngineHost {
 
     private fun updateRotateLabel() {
         btnRotate.text = when (series.orientation) {
-            1 -> "▭ แนวนอน"
-            2 -> "▯ แนวตั้ง"
-            3 -> "⟳ ตามเครื่อง"
-            else -> "⟳ หมุน"
+            1 -> "แนวนอน"
+            2 -> "แนวตั้ง"
+            3 -> "ตามเครื่อง"
+            else -> "หมุนจอ"
         }
     }
 

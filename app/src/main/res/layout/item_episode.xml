@@ -6,14 +6,14 @@
     android:background="?attr/selectableItemBackground"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingTop="8dp"
-    android:paddingBottom="8dp">
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp">
 
     <com.google.android.material.card.MaterialCardView
-        android:layout_width="128dp"
-        android:layout_height="72dp"
-        app:cardBackgroundColor="#33808080"
-        app:cardCornerRadius="4dp"
+        android:layout_width="136dp"
+        android:layout_height="77dp"
+        app:cardBackgroundColor="@color/card_bg"
+        app:cardCornerRadius="8dp"
         app:cardElevation="0dp">
 
         <FrameLayout
@@ -28,13 +28,28 @@
                 android:scaleType="centerCrop" />
 
             <ImageView
-                android:layout_width="32dp"
-                android:layout_height="32dp"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
                 android:layout_gravity="center"
                 android:background="@drawable/bg_circle"
                 android:contentDescription="เล่น"
-                android:padding="6dp"
+                android:padding="7dp"
                 android:src="@drawable/ic_play" />
+
+            <TextView
+                android:id="@+id/txtDuration"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="5dp"
+                android:background="@drawable/bg_badge"
+                android:paddingStart="6dp"
+                android:paddingTop="1dp"
+                android:paddingEnd="6dp"
+                android:paddingBottom="1dp"
+                android:textColor="#FFFFFF"
+                android:textSize="10sp"
+                android:visibility="gone" />
 
             <ProgressBar
                 android:id="@+id/progress"
@@ -54,7 +69,7 @@
         android:layout_height="wrap_content"
         android:layout_weight="1"
         android:orientation="vertical"
-        android:paddingStart="12dp">
+        android:paddingStart="14dp">
 
         <TextView
             android:id="@+id/txtTitle"
@@ -63,23 +78,24 @@
             android:ellipsize="end"
             android:maxLines="2"
             android:textColor="?android:attr/textColorPrimary"
-            android:textSize="15sp" />
+            android:textSize="16sp"
+            android:textStyle="bold" />
 
         <TextView
             android:id="@+id/txtSubtitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:paddingTop="3dp"
             android:textColor="?android:attr/textColorSecondary"
-            android:textSize="12sp" />
+            android:textSize="13sp" />
     </LinearLayout>
 
-    <TextView
+    <ImageButton
         android:id="@+id/btnMore"
         android:layout_width="40dp"
         android:layout_height="48dp"
         android:background="?attr/selectableItemBackgroundBorderless"
-        android:gravity="center"
-        android:text="⋮"
-        android:textColor="?android:attr/textColorPrimary"
-        android:textSize="22sp" />
+        android:contentDescription="ตัวเลือก"
+        android:src="@drawable/ic_more"
+        app:tint="?android:attr/textColorSecondary" />
 </LinearLayout>

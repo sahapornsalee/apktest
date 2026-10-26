@@ -99,6 +99,33 @@ class Series(
 
     val watchedCount: Int get() = episodes.count { it.watched }
 
+    /**
+     * Short episode names, Netflix-style: only the part of each file name that differs from the other
+     * files in its season, so "My Show (2026) EP03 1080p.mp4" reads "ตอนที่ 3".
+     */
+    fun episodeLabels(): List<String> {
+        val bases = episodes.map { ep -> ep.shortName.substringBeforeLast('.').ifEmpty { ep.shortName } }
+        val labels = bases.toMutableList()
+        episodes.indices.groupBy { episodes[it].season }.values.forEach { group ->
+            if (group.size < 2) return@forEach
+            val prefix = Labels.sharedPrefix(group.map { bases[it] })
+            val members = group.filter { bases[it].startsWith(prefix) }
+            val suffix = Labels.sharedSuffix(members.map { bases[it].removePrefix(prefix) })
+            val rests = members.map { bases[it].removePrefix(prefix).removeSuffix(suffix) }
+            val numbered = rests.map { Labels.tidy(it) }
+            // Only shorten when most of the season looks like numbered episodes (not, say, films).
+            if (numbered.count { it != null } * 10 < members.size * 6) return@forEach
+            members.forEachIndexed { k, i ->
+                labels[i] = numbered[k] ?: Labels.clean(rests[k]).ifEmpty { bases[i] }
+            }
+        }
+        return labels
+    }
+
+    /** "ภาค 2 · " when the series has seasons, else "". */
+    fun seasonPrefix(i: Int): String =
+        if (seasons().size > 1) "${TimeText.seasonLabel(episodes[i].season)} · " else ""
+
     /** Sub-folders in playing order; more than one means the series has seasons. */
     fun seasons(): List<String> = episodes.map { it.season }.distinct()
 
@@ -205,6 +232,65 @@ class Series(
                 lastWatchedAt = o.optLong("lastWatchedAt", 0L),
             )
         }
+    }
+}
+
+/** Helpers for [Series.episodeLabels]. */
+object Labels {
+    private val SEPARATORS = charArrayOf(' ', '-', '_', '.', '·', '|', '[', ']', '(', ')', '+')
+    private val NUMBERED = Regex("""^(?:ep\.?|e|episode|ตอนที่|ตอน|#)?\s*0*(\d+)(.*)$""", RegexOption.IGNORE_CASE)
+    private val YEAR = Regex("""\b(19|20)\d\d\b""")
+
+    /** Text all names start with; ignores a few odd ones out (e.g. a renamed episode). */
+    fun sharedPrefix(names: List<String>): String {
+        var prefix = common(names)
+        if (prefix.length < 3 && names.size >= 3) {
+            val bucket = names.groupBy { it.take(4) }.values.maxByOrNull { it.size }
+            if (bucket != null && bucket.size >= maxOf(2, names.size / 2)) prefix = common(bucket)
+        }
+        // Never cut through a number: "EP0" of EP01/EP02 becomes "EP".
+        prefix = prefix.trimEnd { it.isDigit() }
+        // Nor through a word: "ตอน" shared by "ตอนที่ 1" and "ตอนพิเศษ" isn't a real prefix.
+        val cutsWord = prefix.isNotEmpty() && prefix.last() !in SEPARATORS &&
+            names.any { it.length > prefix.length && it.startsWith(prefix) && it[prefix.length].isLetter() }
+        if (cutsWord) prefix = prefix.substring(0, prefix.indexOfLast { it in SEPARATORS } + 1)
+        return prefix
+    }
+
+    /** Text all names end with (quality tags and the like), without eating into numbers. */
+    fun sharedSuffix(rests: List<String>): String {
+        if (rests.size < 2) return ""
+        var suffix = common(rests.map { it.reversed() }).reversed().trimStart { it.isDigit() }
+        if (rests.any { it.length <= suffix.length }) suffix = ""
+        return suffix
+    }
+
+    /** "03 Pilot" → "ตอนที่ 3 · Pilot", "3" → "ตอนที่ 3"; null when it isn't a numbered episode. */
+    fun tidy(rest: String): String? {
+        val m = NUMBERED.find(rest.trim(*SEPARATORS)) ?: return null
+        val number = m.groupValues[1]
+        val tail = clean(m.groupValues[2])
+        // A four-digit number or a year in the name means a film or date, not an episode.
+        if (number.length > 3 || YEAR.containsMatchIn(tail)) return null
+        return if (tail.isEmpty()) "ตอนที่ $number" else "ตอนที่ $number · $tail"
+    }
+
+    /** Trims separators; "The.Return" → "The Return". */
+    fun clean(text: String): String {
+        val t = text.trim(*SEPARATORS)
+        return if (' ' in t) t else t.replace('.', ' ').replace('_', ' ')
+    }
+
+    private fun common(names: List<String>): String {
+        if (names.isEmpty()) return ""
+        var end = names.minOf { it.length }
+        val first = names.first()
+        for (n in names) {
+            var i = 0
+            while (i < end && n[i] == first[i]) i++
+            end = i
+        }
+        return first.substring(0, end)
     }
 }
 

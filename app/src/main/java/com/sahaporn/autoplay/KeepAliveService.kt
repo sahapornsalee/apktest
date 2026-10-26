@@ -27,9 +27,9 @@ object PlaybackNotification {
 
     fun build(
         ctx: Context,
-        series: Series,
-        ep: Episode,
-        index: Int,
+        title: String,
+        text: String,
+        thumbUri: String,
         playing: Boolean,
         token: MediaSession.Token,
     ): Notification {
@@ -52,8 +52,8 @@ object PlaybackNotification {
         )
         val builder = Notification.Builder(ctx, CHANNEL)
             .setSmallIcon(R.drawable.ic_play)
-            .setContentTitle(ep.shortName)
-            .setContentText("${series.name} · ตอนที่ ${index + 1}")
+            .setContentTitle(title)
+            .setContentText(text)
             .setContentIntent(open)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
@@ -64,7 +64,7 @@ object PlaybackNotification {
             )
             .addAction(action(R.drawable.ic_next, "ถัดไป", ACTION_NEXT, 3))
             .setStyle(Notification.MediaStyle().setMediaSession(token).setShowActionsInCompactView(0, 1, 2))
-        Thumbs.cached(ep.uri)?.let { builder.setLargeIcon(it) }
+        Thumbs.cached(thumbUri)?.let { builder.setLargeIcon(it) }
         return builder.build()
     }
 }

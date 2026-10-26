@@ -1,7 +1,12 @@
 package com.sahaporn.autoplay
 
 import android.content.Intent
+import android.graphics.Typeface
 import android.os.Bundle
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
@@ -18,6 +23,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.color.MaterialColors
 
 /** Home screen: a "continue watching" hero, then Netflix-style rows per category. */
 class MainActivity : ThemedActivity() {
@@ -48,6 +54,12 @@ class MainActivity : ThemedActivity() {
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
         setupBars(findViewById(R.id.root), toolbar)
+        // App name as a bold, accent-coloured logo, the way streaming apps show theirs.
+        title = SpannableString(getString(R.string.app_name)).apply {
+            setSpan(ForegroundColorSpan(MaterialColors.getColor(toolbar, androidx.appcompat.R.attr.colorPrimary)), 0, length, 0)
+            setSpan(StyleSpan(Typeface.BOLD), 0, length, 0)
+            setSpan(RelativeSizeSpan(1.25f), 0, length, 0)
+        }
         content = findViewById(R.id.content)
         findViewById<View>(R.id.btnAdd).setOnClickListener { showAddDialog(null) }
     }
@@ -90,6 +102,7 @@ class MainActivity : ThemedActivity() {
         }
         menu.add(0, MENU_ADD_CATEGORY, 2, "+ เพิ่มหมวดหมู่")
         menu.add(0, MENU_THEME, 3, "🎨 ธีมและสี")
+        menu.tintIcons(this)
         return true
     }
 
@@ -172,7 +185,7 @@ class MainActivity : ThemedActivity() {
         Thumbs.load(this, ep.uri, v.findViewById(R.id.imgHero))
         v.findViewById<TextView>(R.id.txtHeroTitle).text = s.name
         val left = if (ep.duration > 0 && ep.hasProgress && !ep.watched) " · เหลือ ${TimeText.ms(ep.duration - ep.position)}" else ""
-        v.findViewById<TextView>(R.id.txtHeroSub).text = "ตอนที่ ${idx + 1} · ${ep.shortName}$left"
+        v.findViewById<TextView>(R.id.txtHeroSub).text = "${s.seasonPrefix(idx)}${s.episodeLabels()[idx]}$left"
         v.findViewById<ProgressBar>(R.id.heroProgress).showPercent(TimeText.percent(ep))
         v.findViewById<Button>(R.id.btnHeroPlay).apply {
             text = if (ep.hasProgress) "▶  ดูต่อ" else "▶  เล่น"
@@ -236,7 +249,7 @@ class MainActivity : ThemedActivity() {
         val base = when {
             idx == null -> "✓ ดูครบ ${s.episodes.size} ตอน"
             s.watchedCount == 0 && !s.episodes[idx].hasProgress -> "${s.episodes.size} ตอน"
-            else -> "ตอนที่ ${idx + 1} · ${TimeText.ms(s.episodes[idx].resumePosition)}"
+            else -> "${s.seasonPrefix(idx)}${s.episodeLabels()[idx]} · ${TimeText.ms(s.episodes[idx].resumePosition)}"
         }
         if (searchText.isEmpty() || s.name.contains(searchText, ignoreCase = true)) return base
         val hit = s.episodes.firstOrNull { it.name.contains(searchText, ignoreCase = true) } ?: return base
@@ -247,29 +260,32 @@ class MainActivity : ThemedActivity() {
         Dialogs.menu(
             this, s.name, listOf(
                 Resume.label(s) to { Resume.play(this, s) },
-                "ⓘ รายละเอียด / แก้ไขตอน" to { openSeries(s.id) },
-                (if (s.pinned) "เลิกปักหมุด" else "📌 ปักหมุด") to {
+                "ⓘ  รายละเอียด / แก้ไขตอน" to { openSeries(s.id) },
+                (if (s.pinned) "📌  เลิกปักหมุด" else "📌  ปักหมุดไว้บนสุด") to {
                     s.pinned = !s.pinned
                     Store.put(this, s)
                     refresh()
                 },
-                "เปลี่ยนชื่อ" to {
+                "✏️  เปลี่ยนชื่อ" to {
                     Dialogs.askText(this, "เปลี่ยนชื่อเรื่อง", s.name) { name ->
                         s.name = name
                         Store.put(this, s)
                         refresh()
                     }
                 },
-                "ย้ายหมวดหมู่" to {
+                "📁  ย้ายหมวดหมู่" to {
                     Dialogs.chooseCategory(this, s.category) { cat ->
                         s.category = cat
                         Store.put(this, s)
                         refresh()
                     }
                 },
-                "↺ รีเซ็ตการดูเรื่องนี้" to { Resume.confirmReset(this, s) { refresh() } },
-                "ลบเรื่องนี้" to {
-                    Dialogs.confirm(this, "ลบ “${s.name}” ออกจากรายการ?\n(ไฟล์วิดีโอในเครื่องจะไม่ถูกลบ)", "ลบ") {
+                Dialogs.danger(this, "↺  รีเซ็ตการดูเรื่องนี้") to { Resume.confirmReset(this, s) { refresh() } },
+                Dialogs.danger(this, "🗑  ลบเรื่องนี้") to {
+                    Dialogs.confirm(
+                        this, "ลบ “${s.name}”?\nเอาออกจากแอปเท่านั้น ไฟล์วิดีโอในเครื่องยังอยู่ครบ",
+                        "ลบเรื่องนี้", destructive = true,
+                    ) {
                         Store.delete(this, s.id)
                         refresh()
                     }
@@ -281,23 +297,26 @@ class MainActivity : ThemedActivity() {
     private fun categoryMenu(cat: String) {
         Dialogs.menu(
             this, cat, listOf(
-                "+ เพิ่มเรื่องในหมวดนี้" to { showAddDialog(cat) },
-                "เปลี่ยนชื่อหมวดหมู่" to {
+                "＋  เพิ่มเรื่องในหมวดนี้" to { showAddDialog(cat) },
+                "✏️  เปลี่ยนชื่อหมวดหมู่" to {
                     Dialogs.askText(this, "เปลี่ยนชื่อหมวดหมู่", cat) { name ->
                         if (name != cat && !Store.renameCategory(this, cat, name)) toast("มีหมวดหมู่นี้แล้ว")
                         refresh()
                     }
                 },
-                "เลื่อนขึ้น" to {
+                "⬆  เลื่อนขึ้น" to {
                     Store.moveCategory(this, cat, -1)
                     refresh()
                 },
-                "เลื่อนลง" to {
+                "⬇  เลื่อนลง" to {
                     Store.moveCategory(this, cat, 1)
                     refresh()
                 },
-                "ลบหมวดหมู่" to {
-                    Dialogs.confirm(this, "ลบหมวดหมู่ “$cat”?\nเรื่องในหมวดนี้จะยังอยู่ ย้ายไปที่ “ไม่มีหมวดหมู่”", "ลบ") {
+                Dialogs.danger(this, "🗑  ลบหมวดหมู่") to {
+                    Dialogs.confirm(
+                        this, "ลบหมวดหมู่ “$cat”?\nเรื่องในหมวดนี้ยังอยู่ จะย้ายไปที่ “ไม่มีหมวดหมู่”",
+                        "ลบหมวดหมู่", destructive = true,
+                    ) {
                         Store.deleteCategory(this, cat)
                         refresh()
                     }

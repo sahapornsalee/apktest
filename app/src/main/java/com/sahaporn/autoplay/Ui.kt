@@ -3,8 +3,14 @@ package com.sahaporn.autoplay
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
 import android.os.PowerManager
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.view.Menu
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -15,6 +21,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -22,6 +29,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 /** RecyclerView adapter that binds each item with a plain function. */
@@ -56,7 +65,12 @@ fun ProgressBar.showPercent(pct: Int) {
 fun AppCompatActivity.setupBars(root: View, toolbar: View) {
     WindowCompat.setDecorFitsSystemWindows(window, false)
     window.statusBarColor = Color.TRANSPARENT
-    WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
+    // Dark status-bar icons on light pages, light ones on dark pages.
+    val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+    WindowInsetsControllerCompat(window, window.decorView).apply {
+        isAppearanceLightStatusBars = !night
+        isAppearanceLightNavigationBars = !night
+    }
     ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
         val b = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
         root.setPadding(b.left, 0, b.right, b.bottom)
@@ -72,6 +86,12 @@ fun AppCompatActivity.setupBars(root: View, toolbar: View) {
 fun Activity.keepPlayingInBackground(playing: Boolean): Boolean {
     val screenOff = !(getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
     return playing && screenOff && !isFinishing && Settings.backgroundAudio(this)
+}
+
+/** Menu icons are white vectors; colour them like the toolbar text so they show on light pages too. */
+fun Menu.tintIcons(ctx: Context) {
+    val color = MaterialColors.getColor(ctx, android.R.attr.textColorPrimary, Color.WHITE)
+    for (i in 0 until size()) getItem(i).iconTintList = ColorStateList.valueOf(color)
 }
 
 fun Context.toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
@@ -130,12 +150,40 @@ object Dialogs {
         input.requestFocus()
     }
 
-    fun confirm(act: Activity, message: String, okText: String, onOk: () -> Unit) {
-        MaterialAlertDialogBuilder(act)
-            .setMessage(message)
-            .setPositiveButton(okText) { _, _ -> onOk() }
-            .setNegativeButton("ยกเลิก", null)
-            .show()
+    /** Red text for menu entries that delete or reset something. */
+    fun danger(act: Context, label: String): CharSequence = SpannableString(label).apply {
+        setSpan(ForegroundColorSpan(ContextCompat.getColor(act, R.color.danger)), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+
+    /**
+     * Asks before doing [onOk]. [destructive] makes the button red, for deleting or resetting.
+     * The first line of [message] becomes the sheet's title.
+     */
+    fun confirm(act: Activity, message: String, okText: String, destructive: Boolean = false, onOk: () -> Unit) {
+        val sheet = BottomSheetDialog(act)
+        val view = act.layoutInflater.inflate(R.layout.sheet_confirm, null)
+        val title = message.substringBefore('\n')
+        val body = message.substringAfter('\n', "")
+        view.findViewById<TextView>(R.id.txtConfirmTitle).text = title
+        view.findViewById<TextView>(R.id.txtConfirmMessage).apply {
+            text = body
+            visibility = if (body.isEmpty()) View.GONE else View.VISIBLE
+        }
+        view.findViewById<MaterialButton>(R.id.btnConfirmOk).apply {
+            text = okText
+            val color = if (destructive) ContextCompat.getColor(act, R.color.danger) else
+                MaterialColors.getColor(act, androidx.appcompat.R.attr.colorPrimary, Color.RED)
+            backgroundTintList = ColorStateList.valueOf(color)
+            setOnClickListener {
+                sheet.dismiss()
+                onOk()
+            }
+        }
+        view.findViewById<View>(R.id.btnConfirmCancel).setOnClickListener { sheet.dismiss() }
+        sheet.setContentView(view)
+        sheet.behavior.state = BottomSheetBehavior.STATE_EXPANDED
+        sheet.behavior.skipCollapsed = true
+        sheet.show()
     }
 
     /** Lets the user pick a category ("" = none) or create a new one. */
@@ -221,7 +269,7 @@ object Resume {
         if (s.episodes.isEmpty()) return
         val idx = s.resumeIndex()
         if (idx == null) {
-            Dialogs.confirm(act, "ดู “${s.name}” ครบทุกตอนแล้ว\nเริ่มดูใหม่ตั้งแต่ตอนแรก?", "เริ่มใหม่") {
+            Dialogs.confirm(act, "ดู “${s.name}” ครบทุกตอนแล้ว\nเริ่มดูใหม่ตั้งแต่ตอนแรก?", "▶  เริ่มดูใหม่") {
                 s.resetProgress()
                 Store.put(act, s)
                 PlayerActivity.start(act, s.id, 0, 0L)
@@ -232,7 +280,10 @@ object Resume {
     }
 
     fun confirmReset(act: Activity, s: Series, onDone: () -> Unit) {
-        Dialogs.confirm(act, "ล้างการจดจำการดูของ “${s.name}” ทุกตอน แล้วเริ่มดูใหม่ตั้งแต่ตอนแรก?", "รีเซ็ต") {
+        Dialogs.confirm(
+            act, "รีเซ็ตการดู “${s.name}”?\nล้างตำแหน่งที่ดูค้างไว้และสถานะดูจบของทุกตอน แล้วเริ่มดูใหม่ตั้งแต่ตอนแรก",
+            "รีเซ็ตการดู", destructive = true,
+        ) {
             s.resetProgress()
             Store.put(act, s)
             act.toast("รีเซ็ตแล้ว")

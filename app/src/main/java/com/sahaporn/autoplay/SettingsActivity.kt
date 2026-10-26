@@ -63,8 +63,11 @@ class SettingsActivity : ThemedActivity() {
         }
 
         section("ข้อมูล")
-        action("รีเซ็ตการดูทุกเรื่อง", "ล้างตำแหน่งที่ดูค้างไว้และสถานะดูจบของทุกตอน") {
-            Dialogs.confirm(this, "ล้างการจดจำการดูของทุกเรื่อง ทุกตอน?", "รีเซ็ตทั้งหมด") {
+        action(Dialogs.danger(this, "รีเซ็ตการดูทุกเรื่อง"), "ล้างตำแหน่งที่ดูค้างไว้และสถานะดูจบของทุกตอน") {
+            Dialogs.confirm(
+                this, "รีเซ็ตการดูทุกเรื่อง?\nล้างตำแหน่งที่ดูค้างไว้และสถานะดูจบของทุกตอนในทุกเรื่อง",
+                "รีเซ็ตทั้งหมด", destructive = true,
+            ) {
                 Store.resetAllProgress(this)
                 toast("รีเซ็ตทั้งหมดแล้ว")
             }
@@ -87,7 +90,7 @@ class SettingsActivity : ThemedActivity() {
         content.addView(TextView(this, null, 0, R.style.SectionTitle).apply { text = title })
     }
 
-    private fun row(title: String, summary: CharSequence): View {
+    private fun row(title: CharSequence, summary: CharSequence): View {
         val v = layoutInflater.inflate(R.layout.item_setting, content, false)
         v.findViewById<TextView>(R.id.txtSettingTitle).text = title
         v.findViewById<TextView>(R.id.txtSettingSummary).text = summary
@@ -95,7 +98,7 @@ class SettingsActivity : ThemedActivity() {
         return v
     }
 
-    private fun action(title: String, summary: CharSequence, onClick: () -> Unit) {
+    private fun action(title: CharSequence, summary: CharSequence, onClick: () -> Unit) {
         row(title, summary).setOnClickListener { onClick() }
     }
 

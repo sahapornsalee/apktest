@@ -1,6 +1,11 @@
 <resources>
-    <color name="primary">#E53935</color>
-    <color name="primary_dark">#B71C1C</color>
-    <color name="ic_bg">#E53935</color>
+    <color name="primary">#E50914</color>
+    <color name="primary_dark">#B20710</color>
+    <color name="ic_bg">#E50914</color>
     <color name="overlay">#99000000</color>
+    <!-- Red for delete and reset, whatever accent colour is chosen. -->
+    <color name="danger">#E53935</color>
+    <color name="app_bg">#FAFAFA</color>
+    <color name="app_surface">#FFFFFF</color>
+    <color name="card_bg">#14000000</color>
 </resources>

@@ -5,6 +5,9 @@
         <item name="colorOnPrimary">#FFFFFF</item>
         <item name="colorSecondary">@color/primary</item>
         <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="android:colorBackground">@color/app_bg</item>
+        <item name="android:windowBackground">@color/app_bg</item>
+        <item name="colorSurface">@color/app_surface</item>
         <item name="bottomSheetDialogTheme">@style/ThemeOverlay.AutoPlay.BottomSheet</item>
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.AutoPlay.Dialog</item>
     </style>
@@ -13,6 +16,7 @@
         <item name="colorPrimary">@color/primary</item>
         <item name="colorSecondary">@color/primary</item>
         <item name="android:windowBackground">@android:color/black</item>
+        <item name="colorSurface">@color/app_surface</item>
         <item name="bottomSheetDialogTheme">@style/ThemeOverlay.AutoPlay.BottomSheet</item>
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.AutoPlay.Dialog</item>
     </style>
@@ -105,5 +109,14 @@
         <item name="android:textColor">?attr/colorPrimary</item>
         <item name="android:textSize">13sp</item>
         <item name="android:textStyle">bold</item>
+    </style>
+
+    <!-- Big full-width buttons used in confirm sheets. -->
+    <style name="SheetButton" parent="Widget.MaterialComponents.Button.UnelevatedButton">
+        <item name="android:textSize">16sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="cornerRadius">12dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
     </style>
 </resources>

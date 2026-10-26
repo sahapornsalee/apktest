@@ -96,10 +96,18 @@
                     android:textSize="12sp"
                     android:visibility="gone" />
 
+                <TextView
+                    android:id="@+id/txtPlaySummary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingTop="10dp"
+                    android:textColor="?android:attr/textColorSecondary"
+                    android:textSize="13sp" />
+
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
+                    android:layout_marginTop="8dp"
                     android:orientation="horizontal">
 
                     <TextView
@@ -109,16 +117,16 @@
                         android:text="เริ่มใหม่" />
 
                     <TextView
+                        android:id="@+id/btnPlaySettings"
+                        style="@style/ActionItem"
+                        android:drawableTop="@drawable/ic_settings"
+                        android:text="ตั้งค่าการเล่น" />
+
+                    <TextView
                         android:id="@+id/btnAdd"
                         style="@style/ActionItem"
                         android:drawableTop="@drawable/ic_add"
                         android:text="เพิ่มตอน" />
-
-                    <TextView
-                        android:id="@+id/btnRescan"
-                        style="@style/ActionItem"
-                        android:drawableTop="@drawable/ic_refresh"
-                        android:text="สแกนตอนใหม่" />
 
                     <TextView
                         android:id="@+id/btnMoreActions"
@@ -127,56 +135,17 @@
                         android:text="อื่นๆ" />
                 </LinearLayout>
 
-                <com.google.android.material.card.MaterialCardView
+                <View
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    app:cardBackgroundColor="#14808080"
-                    app:cardCornerRadius="16dp"
-                    app:cardElevation="0dp">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:paddingTop="6dp"
-                        android:paddingBottom="6dp">
-
-                        <androidx.appcompat.widget.SwitchCompat
-                            android:id="@+id/swAutoPlay"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:minHeight="52dp"
-                            android:paddingStart="16dp"
-                            android:paddingEnd="16dp"
-                            android:text="เล่นตอนต่อไปอัตโนมัติ"
-                            android:textSize="15sp" />
-
-                        <androidx.appcompat.widget.SwitchCompat
-                            android:id="@+id/swCountdown"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:minHeight="52dp"
-                            android:paddingStart="16dp"
-                            android:paddingEnd="16dp"
-                            android:text="นับถอยหลัง 5 วินาทีก่อนไปตอนต่อไป"
-                            android:textSize="15sp" />
-
-                        <include
-                            android:id="@+id/rowSkip"
-                            layout="@layout/item_setting" />
-
-                        <include
-                            android:id="@+id/rowEngine"
-                            layout="@layout/item_setting" />
-                    </LinearLayout>
-                </com.google.android.material.card.MaterialCardView>
+                    android:layout_height="1dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@color/card_bg" />
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:paddingTop="22dp"
-                    android:paddingBottom="4dp"
+                    android:paddingTop="18dp"
+                    android:paddingBottom="6dp"
                     android:text="ตอนทั้งหมด"
                     android:textColor="?android:attr/textColorPrimary"
                     android:textSize="20sp"

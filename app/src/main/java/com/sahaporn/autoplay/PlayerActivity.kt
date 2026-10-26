@@ -11,6 +11,8 @@ import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaSession
@@ -92,6 +94,13 @@ class PlayerActivity : ThemedActivity(), EngineHost {
     private var sessionEngine: Int? = null
     private val triedEngines = mutableSetOf<Int>()
     private var index = 0
+
+    /** Short episode names ("ตอนที่ 3"), see [Series.episodeLabels]. */
+    private var labels: List<String> = emptyList()
+
+    // ExoPlayer handles audio focus itself; the other two engines get it from here.
+    private var focusRequest: AudioFocusRequest? = null
+    private var resumeOnFocusGain = false
 
     private lateinit var videoFrame: View
     private lateinit var exoView: PlayerView
@@ -197,6 +206,56 @@ class PlayerActivity : ThemedActivity(), EngineHost {
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    /** Headphones unplugged: pause, as every player should (ExoPlayer already does this itself). */
+    private val noisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (::engine.isInitialized && engineKind != Engines.MAIN && engine.isPlaying) engine.pause()
+        }
+    }
+
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        if (!::engine.isInitialized || engineKind == Engines.MAIN) return@OnAudioFocusChangeListener
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                resumeOnFocusGain = false
+                engine.pause()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                if (engine.isPlaying) {
+                    resumeOnFocusGain = true
+                    engine.pause()
+                }
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (resumeOnFocusGain) {
+                    resumeOnFocusGain = false
+                    engine.play()
+                }
+            }
+        }
+    }
+
+    /** Pause for calls and other apps' sound when the system player or VLC is playing. */
+    private fun requestAudioFocus() {
+        if (engineKind == Engines.MAIN) return
+        val request = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener(focusListener, handler)
+            .build()
+            .also { focusRequest = it }
+        audioManager.requestAudioFocus(request)
+    }
+
+    private fun abandonAudioFocus() {
+        focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        resumeOnFocusGain = false
+    }
+
     /** Buttons on the notification and lock screen. */
     private val mediaReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -221,6 +280,7 @@ class PlayerActivity : ThemedActivity(), EngineHost {
             return
         }
         series = s
+        labels = s.episodeLabels()
 
         bindViews()
         keepControlsClearOfScreenEdges()
@@ -234,6 +294,9 @@ class PlayerActivity : ThemedActivity(), EngineHost {
             addAction(PlaybackNotification.ACTION_PREV)
         }
         ContextCompat.registerReceiver(this, mediaReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(
+            this, noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY), ContextCompat.RECEIVER_EXPORTED
+        )
         receiverRegistered = true
 
         applyOrientation()
@@ -318,6 +381,8 @@ class PlayerActivity : ThemedActivity(), EngineHost {
     /** Swaps the engine and shows its picture view; the caller opens the clip afterwards. */
     private fun useEngine(kind: Int) {
         if (::engine.isInitialized) engine.release()
+        // ExoPlayer asks for audio focus on its own; don't hold a second request against it.
+        if (kind == Engines.MAIN) abandonAudioFocus()
         engineKind = kind
         exoView.visibility = if (kind == Engines.MAIN) View.VISIBLE else View.GONE
         vlcLayout.visibility = if (kind == Engines.VLC) View.VISIBLE else View.GONE
@@ -404,6 +469,7 @@ class PlayerActivity : ThemedActivity(), EngineHost {
 
     override fun onEnginePlaying() {
         failures = 0
+        requestAudioFocus()
         if (series.engine == Engines.AUTO && triedEngines.size > 1) sessionEngine = engineKind
         buffering.visibility = View.GONE
         btnPlay.setImageResource(R.drawable.ic_pause)
@@ -487,7 +553,7 @@ class PlayerActivity : ThemedActivity(), EngineHost {
     }
 
     private fun updateCountdownText() {
-        val next = series.episodes.getOrNull(index + 1)?.shortName ?: ""
+        val next = if (hasNext()) "${series.seasonPrefix(index + 1)}${labels.getOrElse(index + 1) { "" }}" else ""
         txtCountdown.text = "ตอนต่อไปใน $countdownLeft วินาที\n$next"
     }
 
@@ -808,7 +874,7 @@ class PlayerActivity : ThemedActivity(), EngineHost {
 
     private fun updateTitle() {
         txtSeriesName.text = series.name
-        txtTitle.text = "ตอนที่ ${index + 1}/${series.episodes.size} · ${currentEpisode().shortName}"
+        txtTitle.text = "${series.seasonPrefix(index)}${labels.getOrElse(index) { currentEpisode().shortName }}"
     }
 
     private fun seekBy(delta: Long) {
@@ -1063,7 +1129,7 @@ class PlayerActivity : ThemedActivity(), EngineHost {
             else -> ""
         }
         Dialogs.menu(
-            this, "ตอนที่ ${index + 1} · ${ep.shortName}", listOf(
+            this, "${series.seasonPrefix(index)}${labels.getOrElse(index) { ep.shortName }}", listOf(
                 "🎬 ภาพแตก / เล่นไม่ได้? เปลี่ยนตัวเล่น (ตอนนี้: ${Engines.shortName(engineKind)})" to { chooseEngine() },
                 "⏾ ตั้งเวลาปิด$sleepNote" to { showSleepMenu() },
                 "1️⃣ ดูอีกตอนเดียวแล้วหยุด" to { oneMoreEpisode() },
@@ -1245,7 +1311,7 @@ class PlayerActivity : ThemedActivity(), EngineHost {
         Thumbs.load(this, ep.uri, v.findViewById<ImageView>(R.id.imgThumb))
         v.findViewById<MaterialCardView>(R.id.card).strokeWidth =
             if (current) (3 * resources.displayMetrics.density).toInt() else 0
-        v.findViewById<TextView>(R.id.txtTitle).text = "${i + 1}. ${ep.shortName}"
+        v.findViewById<TextView>(R.id.txtTitle).text = labels.getOrElse(i) { ep.shortName }
         v.findViewById<TextView>(R.id.txtSubtitle).text = if (current) "▶ กำลังเล่น" else TimeText.progress(ep)
         v.findViewById<ProgressBar>(R.id.progress).showPercent(TimeText.percent(ep))
         v.setOnClickListener {
@@ -1336,7 +1402,7 @@ class PlayerActivity : ThemedActivity(), EngineHost {
         val ep = currentEpisode()
         val playing = engine.isPlaying
         val meta = MediaMetadata.Builder()
-            .putString(MediaMetadata.METADATA_KEY_TITLE, ep.shortName)
+            .putString(MediaMetadata.METADATA_KEY_TITLE, labels.getOrElse(index) { ep.shortName })
             .putString(MediaMetadata.METADATA_KEY_ARTIST, series.name)
             .putLong(MediaMetadata.METADATA_KEY_DURATION, engine.length)
         Thumbs.cached(ep.uri)?.let { meta.putBitmap(MediaMetadata.METADATA_KEY_ART, it) }
@@ -1356,7 +1422,7 @@ class PlayerActivity : ThemedActivity(), EngineHost {
                 .build()
         )
         if (notificationShown) {
-            val n = PlaybackNotification.build(this, series, ep, index, playing, session.sessionToken)
+            val n = PlaybackNotification.build(this, notificationTitle(), series.name, ep.uri, playing, session.sessionToken)
             PlaybackNotification.current = n
             getSystemService(NotificationManager::class.java).notify(PlaybackNotification.ID, n)
         }
@@ -1371,10 +1437,13 @@ class PlayerActivity : ThemedActivity(), EngineHost {
             Settings.setNotificationsAsked(this)
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        PlaybackNotification.current =
-            PlaybackNotification.build(this, series, currentEpisode(), index, true, session.sessionToken)
+        PlaybackNotification.current = PlaybackNotification.build(
+            this, notificationTitle(), series.name, currentEpisode().uri, true, session.sessionToken
+        )
         notificationShown = KeepAliveService.start(this)
     }
+
+    private fun notificationTitle() = "${series.seasonPrefix(index)}${labels.getOrElse(index) { currentEpisode().shortName }}"
 
     private fun stopBackgroundNotification() {
         if (!notificationShown) return
@@ -1441,7 +1510,11 @@ class PlayerActivity : ThemedActivity(), EngineHost {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
-        if (receiverRegistered) unregisterReceiver(mediaReceiver)
+        if (receiverRegistered) {
+            unregisterReceiver(mediaReceiver)
+            unregisterReceiver(noisyReceiver)
+        }
+        abandonAudioFocus()
         stopBackgroundNotification()
         if (::session.isInitialized) session.release()
         if (::engine.isInitialized) engine.release()

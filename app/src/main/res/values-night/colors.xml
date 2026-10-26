@@ -1,0 +1,6 @@
+<resources>
+    <!-- Netflix-like near-black pages with slightly lifted sheets and cards. -->
+    <color name="app_bg">#141414</color>
+    <color name="app_surface">#1F1F1F</color>
+    <color name="card_bg">#1FFFFFFF</color>
+</resources>
